@@ -66,6 +66,7 @@ module('apscheduler.triggers.interval', IntervalTrigger=lambda **kw: kw)
 plugin = importlib.import_module('app.plugins.downloadcloudupload')
 core = importlib.import_module('app.plugins.downloadcloudupload.core')
 gateway_module = importlib.import_module('app.plugins.downloadcloudupload.gateway')
+login_module = importlib.import_module('app.plugins.downloadcloudupload.login115')
 
 
 class FakeGateway:
@@ -328,6 +329,86 @@ class QueueTest(unittest.TestCase):
                 self.assertFalse(second)
         with core.worker_lease(self.root / 'worker.lock') as recovered:
             self.assertTrue(recovered)
+
+
+class LoginTest(unittest.TestCase):
+    def setUp(self):
+        self.now = 100
+        self.status = 0
+        self.values = {'UID': 'private-user', 'CID': 'private-cid', 'SEID': 'private-seid'}
+        self.requests = []
+        def request(path, payload=None, image=False):
+            self.requests.append((path, payload))
+            if image:
+                return 'data:image/png;base64,example'
+            if '/token/' in path:
+                return {'uid': 'token', 'time': 100, 'sign': 'private-sign'}
+            if '/get/status/' in path:
+                return {'status': self.status}
+            return {'cookie': self.values}
+        self.login = login_module.Login115(request=request, clock=lambda: self.now)
+
+    def test_confirmed_cookie_never_in_public_projection(self):
+        self.login.start()
+        self.assertEqual(self.login.poll(), 'waiting')
+        self.status = 1
+        self.assertEqual(self.login.poll(), 'scanned')
+        self.status = 2
+        self.assertEqual(self.login.poll(), 'confirmed')
+        self.assertEqual(self.login.cookie, 'UID=private-user; CID=private-cid; SEID=private-seid')
+        self.assertNotIn('private', json.dumps(self.login.public()))
+        count = len(self.requests)
+        self.login.poll()
+        self.assertEqual(len(self.requests), count)
+        self.login.saved()
+        self.assertEqual(self.login.poll(), 'saved')
+        self.assertEqual(self.login.cookie, '')
+        self.assertIsNone(self.login.token)
+
+    def test_expiration_and_cancellation_clear_authorization(self):
+        self.login.start()
+        self.now = 401
+        self.assertEqual(self.login.poll(), 'expired')
+        self.assertEqual(self.login.image, '')
+        self.login.start()
+        self.status = -2
+        self.assertEqual(self.login.poll(), 'cancelled')
+        self.assertIsNone(self.login.token)
+
+    def test_invalid_cookie_rejected(self):
+        self.login.start()
+        self.status = 2
+        self.values['UID'] = 'injected\r\nheader'
+        with self.assertRaises(core.UploadError):
+            self.login.poll()
+        self.assertEqual(self.login.cookie, '')
+
+    def test_cookie_handoff_preserves_backend_settings(self):
+        manager = SimpleNamespace(running_plugins={'P115Disk': object()},
+                                  get_plugin_config=lambda pid: {'timeout_default_read': 77, 'enabled': False})
+        saved = []
+        manager.save_plugin_config = lambda pid, conf: saved.append((pid, conf)) or True
+        manager.reload_plugin_tree = lambda pid: SimpleNamespace(name='ACTIVE')
+        with patch.object(sys.modules['app.sdk.plugin'], 'PluginManager', lambda: manager, create=True):
+            gateway_module.MPGateway().apply115_cookie('UID=user; CID=cid; SEID=seid')
+        self.assertEqual(saved[0][1]['timeout_default_read'], 77)
+        self.assertTrue(saved[0][1]['enabled'])
+
+    def test_login_api_and_page_do_not_return_cookie(self):
+        instance = plugin.DownloadCloudUpload()
+        instance._login = self.login
+        with tempfile.TemporaryDirectory() as folder:
+            instance.test_data_path = Path(folder)
+            with patch.object(plugin.MPGateway, 'require115'):
+                self.assertTrue(instance.api115_start().success)
+            self.status = 2
+            with patch.object(plugin.MPGateway, 'apply115_cookie') as handoff:
+                result = instance.api115_poll()
+                handoff.assert_called_once()
+            self.assertTrue(result.success)
+            self.assertEqual(result.data.state, 'saved')
+            self.assertNotIn('private', result.model_dump_json())
+            self.assertNotIn('private', json.dumps(instance.get_page()))
 
 
 class BoundaryTest(unittest.TestCase):

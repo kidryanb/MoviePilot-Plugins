@@ -1,6 +1,6 @@
 # MoviePilot 下载完成自动上传
 
-版本：`0.1.0`，首个测试版。
+版本：`0.1.1`，测试版。
 
 监控 MoviePilot 中已经配置的 qBittorrent 和 Transmission。任务完成后，按用户设置的文件夹规则复制上传网盘，保留本地文件和做种任务。
 
@@ -22,7 +22,7 @@
 
 ## 安装
 
-在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.1.0 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.1.0)也可以用于本地仓库联调：
+在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.1.1 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.1.1)也可以用于本地仓库联调：
 
 1. 解压源码，并将整个仓库映射进 MP 容器，例如 `/config/local-plugins/download-cloud-upload`。
 2. 按 MP 的本地插件仓库配置，将该路径加入 `PLUGIN_LOCAL_REPO_PATHS`。
@@ -30,6 +30,20 @@
 4. 先配置下载器与文件夹规则，再开启插件。
 
 本插件没有额外的 Python 依赖清单，使用 Python 标准库与 MP 已有依赖。不要在 Windows 上直接运行插件入口文件；它需要 MP 宿主。
+
+## 网盘登录与授权
+
+设置页的“打开网盘配置（我的插件）”按钮进入 MP 插件页。找到对应网盘储存插件，打开其设置并完成授权：
+
+- 115：先安装 DDSRem 的 `115网盘储存`。在本插件设置窗口底部点击“查看数据”，选择 `扫码登录115 / 重新生成二维码`，使用 115 手机 App 扫码并确认，再点击“检查登录并保存授权”。Cookie 自动写入 `115网盘储存`，并启用该插件；对应储存类型为 `115网盘Plus`。
+- 123：在对应 `123云盘` 储存插件中配置账号并启用。
+- CloudDrive2：先在 CloudDrive 服务中登录网盘，再配置并启用 MP 的 CloudDrive 储存插件。
+
+DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem-Dev/MoviePilot-Plugins)。配置后重新打开本插件设置，检查“目标网盘储存”下拉列表。
+
+二维码五分钟后失效。二维码会话和待交接的 Cookie 只保留在内存，重启后需要重新扫码。Cookie 保存在 115 储存插件原有配置中，不写入上传队列或 GitHub，不在任务页显示。扫码后需手动点击检查按钮，当前版本没有自动轮询。
+
+升级到 `0.1.1` 后，关闭旧设置窗口，再重新打开；原有文件夹规则和上传队列保留。
 
 ## 配置文件夹
 
@@ -111,6 +125,8 @@ API 使用 MP 的 Bearer 认证，并要求超级管理员。接口位于 `/api/
 | `/backfill` | POST | 提交预览中选择的任务 |
 | `/action` | POST | 处理所选文件记录 |
 | `/mapping` | POST | 只读测试路径映射 |
+| `/115/start` | POST | 生成 115 登录二维码 |
+| `/115/poll` | POST | 检查扫码、获取 Cookie 并写入 115 储存插件 |
 
 真实验收至少包括：宿主加载、启用与停用、页面渲染、QB 小视频上传、Transmission 小视频上传、做种文件保留、网盘文件可读、重启后不重复上传。当前离线结果不能替代这些检查。
 

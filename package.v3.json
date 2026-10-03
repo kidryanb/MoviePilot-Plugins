@@ -3,12 +3,13 @@
     "name": "下载完成自动上传",
     "description": "监控 QB 和 Transmission，下载完成后按自设文件夹复制上传网盘。",
     "labels": "云盘,下载器",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "icon": "cloud.png",
     "author": "kidryanb",
     "level": 1,
     "system_version": ">=3.0.0",
     "history": {
+      "v0.1.1": "修复配置页标签重叠，增加115扫码登录、Cookie自动交接及未配置网盘提示。",
       "v0.1.0": "首个测试版：双下载器监控、自设文件夹、持久队列、失败重试与上传核对。"
     }
   }

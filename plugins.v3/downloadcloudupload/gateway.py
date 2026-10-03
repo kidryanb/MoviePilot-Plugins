@@ -82,6 +82,26 @@ class MPGateway:
     def __init__(self):
         self.storage = StorageChain()
 
+    @staticmethod
+    def require115():
+        """Require the known storage plugin before offering QR authorization."""
+        from app.sdk.plugin import PluginManager
+        manager = PluginManager()
+        if 'P115Disk' not in manager.running_plugins:
+            raise UploadError('115_STORAGE_PLUGIN_REQUIRED', False)
+        return manager
+
+    def apply115_cookie(self, cookie):
+        """Preserve backend settings and activate the explicitly authorized login."""
+        manager = self.require115()
+        config = dict(manager.get_plugin_config('P115Disk') or {})
+        config.update(cookie=cookie, enabled=True)
+        if not manager.save_plugin_config('P115Disk', config):
+            raise UploadError('115_COOKIE_SAVE_FAILED', False)
+        status = manager.reload_plugin_tree('P115Disk')
+        if getattr(status, 'name', '') != 'ACTIVE':
+            raise UploadError('115_COOKIE_SAVED_RELOAD_REQUIRED', False)
+
     def services(self):
         """Enumerate only the two supported configured downloader types."""
         return {name: service for name, service in DownloaderHelper().get_services().items()

@@ -19,6 +19,19 @@ from app.api.endpoints.plugin import get_current_active_superuser
 
 from .core import Engine, Store, LABELS, VIDEO_EXTENSIONS, map_file, worker_lease
 from .gateway import MPGateway
+from .login115 import Login115
+
+
+LOGIN_LABELS = {'idle': '尚未登录', 'waiting': '等待115手机 App 扫码',
+                'scanned': '已扫码，请在手机上确认登录', 'confirmed': '已确认，等待保存授权',
+                'saved': 'Cookie 已写入115网盘储存并启用，请重新打开设置选择网盘',
+                'expired': '二维码已过期，请重新生成', 'cancelled': '已取消登录，请重新生成'}
+
+
+class LoginResult(BaseModel):
+    """Credential-free QR operation result."""
+
+    state: str
 
 
 class ActionRequest(BaseModel):
@@ -76,7 +89,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '监控 QB 和 Transmission，下载完成后按自设文件夹复制上传网盘。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.1.0'
+    plugin_version = '0.1.1'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -93,6 +106,9 @@ class DownloadCloudUpload(_PluginBase):
         self._engine = None
         self._error = ''
         self._config = {}
+        self._login = Login115()
+        self._login_lock = threading.Lock()
+        self._login_error = ''
 
     def init_plugin(self, config=None):
         """Validate configuration and schedule work through the host scheduler."""
@@ -287,20 +303,77 @@ class DownloadCloudUpload(_PluginBase):
                     ('/backfill', self.api_backfill, 'POST', '补传所选任务', Response[ActionResult]),
                     ('/action', self.api_action, 'POST', '处理所选文件', Response[ActionResult]),
                     ('/mapping', self.api_mapping, 'POST', '测试文件夹规则', Response[MappingResult]),
+                    ('/115/start', self.api115_start, 'POST', '生成115登录二维码', Response[LoginResult]),
+                    ('/115/poll', self.api115_poll, 'POST', '检查115扫码并保存授权', Response[LoginResult]),
                 ]]
+
+    def api115_start(self) -> Response[LoginResult]:
+        """Generate a QR only on an authenticated administrator action."""
+        if not self._login_lock.acquire(blocking=False):
+            return Response(success=False, message='登录请求正在执行，请稍后再试')
+        try:
+            MPGateway.require115()
+            self._login.start()
+            self._login_error = ''
+            return Response(success=True, data=LoginResult(state=self._login.state))
+        except Exception as error:
+            self._login_error = error.code if hasattr(error, 'code') else '115_LOGIN_FAILED'
+            return Response(success=False, message=self._login_error)
+        finally:
+            self._login_lock.release()
+
+    def api115_poll(self) -> Response[LoginResult]:
+        """Exchange confirmed QR credentials and hand them to the storage plugin."""
+        if not self._login_lock.acquire(blocking=False):
+            return Response(success=False, message='登录请求正在执行，请稍后再试')
+        locked = False
+        try:
+            self._login_error = ''
+            if self._login.poll() == 'confirmed':
+                if self._engine:
+                    locked = self._engine.lock.acquire(blocking=False)
+                    if not locked:
+                        return Response(success=False, message='上传正在执行，请结束后再次检查登录')
+                with worker_lease(self.get_data_path() / 'worker.lock') as acquired:
+                    if not acquired:
+                        return Response(success=False, message='上传正在执行，请结束后再次检查登录')
+                    MPGateway().apply115_cookie(self._login.cookie)
+                    self._login.saved()
+            return Response(success=True, data=LoginResult(state=self._login.state))
+        except Exception as error:
+            self._login_error = error.code if hasattr(error, 'code') else '115_LOGIN_FAILED'
+            return Response(success=False, message=self._login_error)
+        finally:
+            if locked:
+                self._engine.lock.release()
+            self._login_lock.release()
 
     def get_form(self):
         """Native folder editor supports adding and deleting arbitrary mappings."""
         gateway = MPGateway()
         try:
             services = list(gateway.services())
-            storages = gateway.storage_options()
         except Exception:
-            services, storages = [], []
+            services = []
+        try:
+            storages = gateway.storage_options()
+            storage_status = ('已发现网盘储存：' + '、'.join(item['title'] for item in storages)
+                              if storages else '尚未发现支持的网盘储存，请先安装并配置网盘储存插件，再重新打开本页。')
+        except Exception:
+            storages = []
+            storage_status = '读取网盘储存失败，请检查网盘储存插件是否已启用，再重新打开本页。'
         preview = self._engine.store.meta('backfill_preview', []) if self._engine else []
         files = self._engine.store.rows("SELECT id,name,state FROM files WHERE state NOT IN ('success','already_exists') ORDER BY id DESC LIMIT 200") if self._engine else []
         def control(component, model, label, **props):
-            return {'component': component, 'props': {'model': model, 'label': label, **props}}
+            if component == 'VSwitch':
+                return {'component': component, 'props': {'model': model, 'label': label,
+                        'hide-details': True, 'inset': True, **props}}
+            return {'component': 'div', 'content': [
+                {'component': 'div', 'props': {'class': 'text-body-2 mb-2',
+                 'style': {'whiteSpace': 'normal', 'lineHeight': '1.5', 'overflowWrap': 'anywhere'}}, 'text': label},
+                {'component': component, 'props': {'model': model, 'aria-label': label,
+                 'variant': 'outlined', 'density': 'comfortable', 'hide-details': 'auto', **props}},
+            ]}
         select_rule = '''function(index) {
             rule_index=index;
             const r = rules[index]; if (!r) return;
@@ -328,6 +401,13 @@ class DownloadCloudUpload(_PluginBase):
         content = [
             {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal',
              'text': '复制上传并保留做种文件。首次启用跳过已有完成任务；旧任务需先预览再选择补传。'}},
+            {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal',
+             'title': '网盘登录与授权',
+             'text': '115 支持扫码获取 Cookie：先安装 DDSRem 的“115网盘储存”，再点击本窗口底部“查看数据”，选择“扫码登录115”。手机确认后点击“检查登录并保存授权”，自动写入 Cookie 并启用储存插件。CloudDrive 请先在其服务中登录网盘。'}},
+            {'component': 'VBtn', 'props': {'href': '/plugins', 'target': '_blank', 'rel': 'noopener',
+             'variant': 'tonal', 'prepend-icon': 'mdi-cloud-cog-outline'}, 'text': '打开网盘配置（我的插件）'},
+            {'component': 'VAlert', 'props': {'type': 'info' if storages else 'warning',
+             'variant': 'tonal', 'text': storage_status}},
             control('VSwitch', 'enabled', '启用插件'),
             control('VSelect', 'downloaders', '监控下载器', items=services, multiple=True, chips=True),
             control('VTextField', 'interval', '检查周期（秒）', type='number', min=30, max=3600),
@@ -346,7 +426,8 @@ class DownloadCloudUpload(_PluginBase):
                     [{'title': name, 'value': name} for name in services]),
             control('VTextField', 'rule_source', '下载器保存文件夹', placeholder='/data/tv'),
             control('VTextField', 'rule_local', 'MP 可读取文件夹', placeholder='/downloads/tv'),
-            control('VSelect', 'rule_storage', '目标网盘储存', items=storages),
+            control('VSelect', 'rule_storage', '目标网盘储存', items=storages,
+                    **{'no-data-text': '请先配置网盘储存插件，然后重新打开本页'}),
             control('VTextField', 'rule_target', '网盘目标文件夹', placeholder='/影视/电视剧'),
             control('VSwitch', 'rule_enabled', '启用该规则'),
             {'component': 'VBtn', 'props': {'onClick': apply_rule, 'class': 'ma-1'}, 'text': '加入或更新规则'},
@@ -368,16 +449,38 @@ class DownloadCloudUpload(_PluginBase):
                      ('确认后端已停止且远端不存在，重新上传', 'restart'), ('忽略', 'ignore')]]),
             control('VSwitch', 'retry_once', '保存后执行所选文件操作'),
         ]
-        return [{'component': 'VForm', 'content': content}], defaults
+        return [{'component': 'VForm', 'content': [
+            {'component': 'VRow', 'props': {'class': 'ma-0'}, 'content': [
+                {'component': 'VCol', 'props': {'cols': 12, 'class': 'px-0 py-3'}, 'content': [item]}
+                for item in content
+            ]}
+        ]}], defaults
 
     def get_page(self):
         """Present queue receipts using text nodes, not untrusted HTML."""
-        page = []
+        base = f'plugin/{self.__class__.__name__}'
+        with self._login_lock:
+            login = self._login.public()
+        login_content = [
+            {'component': 'VCardTitle', 'text': '115 扫码登录'},
+            {'component': 'VCardText', 'text': '先安装“115网盘储存”。使用115手机 App 扫码并确认，再点击“检查登录并保存授权”。授权将写入储存插件并启用，不在本页显示 Cookie。'},
+            {'component': 'VCardText', 'text': LOGIN_LABELS.get(login['state'], login['state'])},
+            {'component': 'VBtn', 'props': {'class': 'ma-2', 'color': 'primary'}, 'text': '扫码登录115 / 重新生成二维码',
+             'events': {'click': {'api': base + '/115/start', 'method': 'POST'}}},
+            {'component': 'VBtn', 'props': {'class': 'ma-2', 'variant': 'tonal'}, 'text': '检查登录并保存授权',
+             'events': {'click': {'api': base + '/115/poll', 'method': 'POST'}}},
+        ]
+        if login['image']:
+            login_content.append({'component': 'VImg', 'props': {'src': login['image'], 'width': 240,
+                                  'height': 240, 'contain': True, 'class': 'ma-4', 'alt': '115登录二维码'}})
+        if self._login_error:
+            login_content.append({'component': 'VAlert', 'props': {'type': 'warning', 'class': 'ma-4',
+                 'text': '请先安装“115网盘储存”。' if self._login_error == '115_STORAGE_PLUGIN_REQUIRED' else self._login_error}})
+        page = [{'component': 'VCard', 'props': {'variant': 'outlined', 'class': 'mb-4'}, 'content': login_content}]
         if self._error:
             page.append({'component': 'VAlert', 'props': {'type': 'error', 'text': self._error}})
         if not self._engine:
             return page
-        base = f'plugin/{self.__class__.__name__}'
         page.extend([
             {'component': 'VBtn', 'props': {'class': 'ma-1'}, 'text': '立即检查',
              'events': {'click': {'api': base + '/check', 'method': 'POST'}}},
