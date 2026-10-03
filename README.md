@@ -22,7 +22,7 @@
 
 ## 安装
 
-GitHub 仓库发布后，在 MP 插件市场中添加该仓库地址并安装“下载完成自动上传”。当前交付包也可以用于本地仓库联调：
+在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.1.0 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.1.0)也可以用于本地仓库联调：
 
 1. 解压源码，并将整个仓库映射进 MP 容器，例如 `/config/local-plugins/download-cloud-upload`。
 2. 按 MP 的本地插件仓库配置，将该路径加入 `PLUGIN_LOCAL_REPO_PATHS`。

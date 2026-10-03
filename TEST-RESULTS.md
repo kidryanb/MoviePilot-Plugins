@@ -23,7 +23,7 @@
 
 ## 交付范围
 
-交付本地源码、插件索引、安装说明、离线测试、GitHub Actions 配置以及源码 ZIP。GitHub 仓库尚未发布，未创建正式 Release。
+交付源码、插件索引、安装说明、离线测试、GitHub Actions 配置以及源码 ZIP。发布仓库为 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，`v0.1.0` 标记为预发布版本。
 
 首版没有后端专用账号熔断、限流识别、独立上传取消或完成通知。上传过程的字节进度取决于后端能力，当前页面显示任务状态。完整设计中这些后续功能不属于本次已验证范围。
 
