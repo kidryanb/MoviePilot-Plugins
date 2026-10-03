@@ -66,7 +66,7 @@ module('apscheduler.triggers.interval', IntervalTrigger=lambda **kw: kw)
 plugin = importlib.import_module('app.plugins.downloadcloudupload')
 core = importlib.import_module('app.plugins.downloadcloudupload.core')
 gateway_module = importlib.import_module('app.plugins.downloadcloudupload.gateway')
-login_module = importlib.import_module('app.plugins.downloadcloudupload.login115')
+cloud_module = importlib.import_module('app.plugins.downloadcloudupload.cloud115')
 
 
 class FakeGateway:
@@ -331,84 +331,111 @@ class QueueTest(unittest.TestCase):
             self.assertTrue(recovered)
 
 
-class LoginTest(unittest.TestCase):
+class DirectCloudTest(unittest.TestCase):
     def setUp(self):
-        self.now = 100
-        self.status = 0
-        self.values = {'UID': 'private-user', 'CID': 'private-cid', 'SEID': 'private-seid'}
-        self.requests = []
-        def request(path, payload=None, image=False):
-            self.requests.append((path, payload))
-            if image:
-                return 'data:image/png;base64,example'
-            if '/token/' in path:
-                return {'uid': 'token', 'time': 100, 'sign': 'private-sign'}
-            if '/get/status/' in path:
-                return {'status': self.status}
-            return {'cookie': self.values}
-        self.login = login_module.Login115(request=request, clock=lambda: self.now)
+        self.items = {'0': [{'cid': '10', 'pid': '0', 'n': '影视'}], '10': []}
+        self.created = []
+        self.uploaded = []
+        def listing(payload, **kwargs):
+            parent = str(payload['cid'])
+            return {'state': True, 'path': [{'cid': parent}], 'offset': payload['offset'],
+                    'count': len(self.items[parent]), 'data': self.items[parent]}
+        def mkdir(payload, **kwargs):
+            identifier = str(20 + len(self.created))
+            self.items[str(payload['pid'])].append({'cid': identifier, 'pid': str(payload['pid']), 'n': payload['cname']})
+            self.items[identifier] = []
+            self.created.append(payload)
+            return {'state': True}
+        def upload(**kwargs):
+            self.uploaded.append(kwargs)
+            self.items[str(kwargs['pid'])].append({'fid': '90', 'cid': str(kwargs['pid']),
+                          'n': kwargs['filename'], 's': kwargs['filesize'], 'pc': 'pickcode'})
+            return {'state': True, 'data': {'pickcode': 'pickcode'}}
+        self.client = SimpleNamespace(fs_files=listing, fs_mkdir=mkdir, upload_file=upload)
+        self.cloud = cloud_module.Cloud115()
+        self.cloud.client = lambda: (self.client, 'account')
 
-    def test_confirmed_cookie_never_in_public_projection(self):
-        self.login.start()
-        self.assertEqual(self.login.poll(), 'waiting')
-        self.status = 1
-        self.assertEqual(self.login.poll(), 'scanned')
-        self.status = 2
-        self.assertEqual(self.login.poll(), 'confirmed')
-        self.assertEqual(self.login.cookie, 'UID=private-user; CID=private-cid; SEID=private-seid')
-        self.assertNotIn('private', json.dumps(self.login.public()))
-        count = len(self.requests)
-        self.login.poll()
-        self.assertEqual(len(self.requests), count)
-        self.login.saved()
-        self.assertEqual(self.login.poll(), 'saved')
-        self.assertEqual(self.login.cookie, '')
-        self.assertIsNone(self.login.token)
-
-    def test_expiration_and_cancellation_clear_authorization(self):
-        self.login.start()
-        self.now = 401
-        self.assertEqual(self.login.poll(), 'expired')
-        self.assertEqual(self.login.image, '')
-        self.login.start()
-        self.status = -2
-        self.assertEqual(self.login.poll(), 'cancelled')
-        self.assertIsNone(self.login.token)
-
-    def test_invalid_cookie_rejected(self):
-        self.login.start()
-        self.status = 2
-        self.values['UID'] = 'injected\r\nheader'
-        with self.assertRaises(core.UploadError):
-            self.login.poll()
-        self.assertEqual(self.login.cookie, '')
-
-    def test_cookie_handoff_preserves_backend_settings(self):
-        manager = SimpleNamespace(running_plugins={'P115Disk': object()},
-                                  get_plugin_config=lambda pid: {'timeout_default_read': 77, 'enabled': False})
-        saved = []
-        manager.save_plugin_config = lambda pid, conf: saved.append((pid, conf)) or True
-        manager.reload_plugin_tree = lambda pid: SimpleNamespace(name='ACTIVE')
+    def test_cookie_read_uses_documented_field_and_does_not_write(self):
+        config = {'cookies': 'UID=123_A1_token; CID=private; SEID=secret', 'enabled': False}
+        original = dict(config)
+        manager = SimpleNamespace(get_plugin_config=lambda pid: config if pid == 'P115StrmHelper' else {})
         with patch.object(sys.modules['app.sdk.plugin'], 'PluginManager', lambda: manager, create=True):
-            gateway_module.MPGateway().apply115_cookie('UID=user; CID=cid; SEID=seid')
-        self.assertEqual(saved[0][1]['timeout_default_read'], 77)
-        self.assertTrue(saved[0][1]['enabled'])
+            cookie, account = cloud_module.strm_cookie()
+        self.assertEqual(config, original)
+        self.assertEqual(account, '123')
+        self.assertEqual(cookie, config['cookies'])
 
-    def test_login_api_and_page_do_not_return_cookie(self):
+    def test_missing_cookie_and_no_automatic_login(self):
+        manager = SimpleNamespace(get_plugin_config=lambda pid: {'cookies': ''})
+        with patch.object(sys.modules['app.sdk.plugin'], 'PluginManager', lambda: manager, create=True):
+            with self.assertRaisesRegex(core.UploadError, '115_STRM_COOKIE_REQUIRED'):
+                cloud_module.strm_cookie()
+        calls = []
+        factory = lambda cookie, **kwargs: calls.append(kwargs) or self.client
+        with patch.object(cloud_module, 'strm_cookie', return_value=('UID=123; CID=c; SEID=s', '123')):
+            with patch.dict(sys.modules, {'p115client': SimpleNamespace(P115Client=factory)}):
+                cloud_module.Cloud115().client()
+        self.assertEqual(calls, [{'check_for_relogin': False}])
+
+    def test_query_failure_and_parent_fallback_are_not_absence(self):
+        for response in [{'state': False}, {'state': True, 'path': [{'cid': '0'}], 'data': [], 'count': 0, 'offset': 0}]:
+            self.client.fs_files = lambda payload, **k: ({'state': True, 'path': [{'cid': '0'}],
+                'data': self.items['0'], 'count': 1, 'offset': 0} if str(payload['cid']) == '0' else response)
+            with self.assertRaises(core.UploadError):
+                self.cloud.resolve(self.client, '/影视/video.mkv')
+
+    def test_incomplete_list_rejected(self):
+        self.client.fs_files = lambda *a, **k: {'state': True, 'path': [{'cid': '0'}], 'data': [], 'count': 2, 'offset': 0}
+        with self.assertRaisesRegex(core.UploadError, '115_INCOMPLETE_FILE_LIST'):
+            self.cloud.lookup('/missing.mkv')
+
+    def test_lookup_checks_later_pages(self):
+        values = [{'fid': str(i + 1), 'cid': '0', 'n': f'{i}.mkv', 's': 5} for i in range(1001)]
+        values[-1]['n'] = 'last.mkv'
+        offsets = []
+        def listing(payload, **kwargs):
+            offset = payload['offset']
+            offsets.append(offset)
+            return {'state': True, 'path': [{'cid': '0'}], 'count': len(values),
+                    'offset': offset, 'data': values[offset:offset + 1000]}
+        self.client.fs_files = listing
+        self.assertEqual(self.cloud.lookup('/last.mkv')['id'], 'account:1001')
+        self.assertEqual(offsets, [0, 1000])
+
+    def test_same_name_ambiguity_blocks_upload(self):
+        self.items['10'] = [{'fid': fid, 'cid': '10', 'n': 'video.mkv', 's': 5} for fid in ['1', '2']]
+        with self.assertRaisesRegex(core.UploadError, '115_AMBIGUOUS_PATH'):
+            self.cloud.lookup('/影视/video.mkv')
+        self.assertEqual(self.uploaded, [])
+
+    def test_create_only_descendants_of_existing_root(self):
+        with self.assertRaisesRegex(core.UploadError, 'CONFIGURED_ROOT_MISSING'):
+            self.cloud.folder('/missing/sub', '/missing')
+        self.assertEqual(self.created, [])
+        folder = self.cloud.folder('/影视/剧集/第一季', '/影视')
+        self.assertEqual(len(self.created), 2)
+        self.assertEqual(folder['account'], 'account')
+
+    def test_direct_upload_receipt_and_account_scoped_lookup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'video.mkv'
+            path.write_bytes(b'video')
+            folder = self.cloud.folder('/影视', '/影视')
+            receipt = self.cloud.upload(folder, path, 'video.mkv')
+            remote = self.cloud.lookup('/影视/video.mkv')
+        self.assertEqual(receipt['id'], 'account:pickcode')
+        self.assertIn(receipt['id'], remote['ids'])
+        self.assertEqual(receipt['size'], remote['size'])
+        self.assertEqual(self.uploaded[0]['filename'], 'video.mkv')
+
+    def test_no_qr_or_storage_configuration_and_no_cookie_in_form(self):
         instance = plugin.DownloadCloudUpload()
-        instance._login = self.login
-        with tempfile.TemporaryDirectory() as folder:
-            instance.test_data_path = Path(folder)
-            with patch.object(plugin.MPGateway, 'require115'):
-                self.assertTrue(instance.api115_start().success)
-            self.status = 2
-            with patch.object(plugin.MPGateway, 'apply115_cookie') as handoff:
-                result = instance.api115_poll()
-                handoff.assert_called_once()
-            self.assertTrue(result.success)
-            self.assertEqual(result.data.state, 'saved')
-            self.assertNotIn('private', result.model_dump_json())
-            self.assertNotIn('private', json.dumps(instance.get_page()))
+        with patch.object(plugin, 'strm_cookie', return_value=('UID=private; CID=secret; SEID=secret', 'private')):
+            form, defaults = instance.get_form()
+        self.assertNotIn('secret', json.dumps(form))
+        self.assertNotIn('rule_storage', defaults)
+        self.assertFalse(any('/115/' in route['path'] for route in instance.get_api()))
+        self.assertNotIn('扫码', json.dumps(instance.get_page(), ensure_ascii=False))
 
 
 class BoundaryTest(unittest.TestCase):

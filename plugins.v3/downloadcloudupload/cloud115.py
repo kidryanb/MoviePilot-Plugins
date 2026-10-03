@@ -1,0 +1,149 @@
+"""Direct 115 uploads using the STRM helper's existing Cookie configuration."""
+
+from http.cookies import SimpleCookie
+from pathlib import PurePosixPath
+
+from .core import UploadError
+
+
+def strm_cookie():
+    """Read the documented cookies field without copying or mutating settings."""
+    try:
+        from app.sdk.plugin import PluginManager
+        config = PluginManager().get_plugin_config('P115StrmHelper') or {}
+        value = config.get('cookies')
+        if not isinstance(value, str) or not value.strip() or '\r' in value or '\n' in value:
+            raise ValueError('missing cookie')
+        parsed = SimpleCookie(value)
+        if any(key not in parsed or not parsed[key].value for key in ('UID', 'CID', 'SEID')):
+            raise ValueError('incomplete cookie')
+        return value.strip(), parsed['UID'].value.split('_')[0]
+    except Exception:
+        raise UploadError('115_STRM_COOKIE_REQUIRED', False) from None
+
+
+def checked(response):
+    """A provider error is never interpreted as an empty directory."""
+    if not isinstance(response, dict) or response.get('state') not in (True, 1):
+        raise UploadError('115_REQUEST_FAILED')
+    return response
+
+
+class Cloud115:
+    """Use p115client already installed with the STRM helper; no storage plugin."""
+
+    def client(self):
+        cookie, account = strm_cookie()
+        try:
+            from p115client import P115Client
+            return P115Client(cookie, check_for_relogin=False), account
+        except ImportError:
+            raise UploadError('115_STRM_CLIENT_REQUIRED', False) from None
+        except Exception:
+            raise UploadError('115_CLIENT_FAILED') from None
+
+    @staticmethod
+    def entries(client, parent):
+        """Require a stable complete listing under the exact requested directory."""
+        entries, offset, count = [], 0, None
+        while True:
+            response = checked(client.fs_files({'cid': parent, 'cur': 1, 'show_dir': 1,
+                               'fc_mix': 1, 'limit': 1000, 'offset': offset,
+                               'o': 'file_name', 'asc': 1}, timeout=30))
+            path, data = response.get('path'), response.get('data')
+            if (not isinstance(path, list) or not path or str(path[-1].get('cid')) != str(parent)
+                    or not isinstance(data, list) or int(response.get('offset', -1)) != offset):
+                raise UploadError('115_LIST_IDENTITY_MISMATCH')
+            total = int(response.get('count', -1))
+            if total < 0 or (count is not None and count != total):
+                raise UploadError('115_LIST_CHANGED')
+            count = total
+            for raw in data:
+                if not isinstance(raw, dict) or not isinstance(raw.get('n'), str):
+                    raise UploadError('115_INVALID_FILE_LIST')
+                is_file = bool(raw.get('fid'))
+                identifier = raw.get('fid') if is_file else raw.get('cid')
+                if identifier is None or str(raw.get('cid' if is_file else 'pid', '')) != str(parent):
+                    raise UploadError('115_INVALID_FILE_LIST')
+                entries.append({'name': raw['n'], 'type': 'file' if is_file else 'dir',
+                                'id': str(identifier), 'size': int(raw.get('s', 0)),
+                                'pickcode': str(raw.get('pc') or '')})
+            offset += len(data)
+            if offset == count:
+                return entries
+            if not data or offset > count:
+                raise UploadError('115_INCOMPLETE_FILE_LIST')
+
+    def child(self, client, parent, name):
+        matches = [item for item in self.entries(client, parent) if item['name'] == name]
+        if len(matches) > 1:
+            raise UploadError('115_AMBIGUOUS_PATH', False)
+        return matches[0] if matches else None
+
+    def resolve(self, client, path):
+        path = PurePosixPath(path)
+        if not path.is_absolute() or '..' in path.parts:
+            raise UploadError('115_INVALID_TARGET', False)
+        current = {'id': '0', 'type': 'dir'}
+        for name in path.parts[1:]:
+            if current['type'] != 'dir':
+                raise UploadError('REMOTE_PATH_IS_FILE', False)
+            current = self.child(client, current['id'], name)
+            if current is None:
+                return None
+        return current
+
+    def lookup(self, target):
+        client, account = self.client()
+        try:
+            item = self.resolve(client, target)
+            if item is None:
+                return None
+            if item['type'] != 'file':
+                raise UploadError('REMOTE_PATH_IS_DIRECTORY', False)
+            ids = [account + ':' + item['id']]
+            if item['pickcode']:
+                ids.append(account + ':' + item['pickcode'])
+            return {'id': ids[0], 'ids': ids, 'size': item['size'], 'confirmed': True}
+        except UploadError:
+            raise
+        except Exception:
+            raise UploadError('REMOTE_QUERY_FAILED') from None
+
+    def folder(self, target, root):
+        client, account = self.client()
+        try:
+            root_path, target_path = PurePosixPath(root), PurePosixPath(target)
+            if not target_path.is_relative_to(root_path):
+                raise UploadError('115_INVALID_TARGET', False)
+            current = self.resolve(client, root)
+            if current is None or current['type'] != 'dir':
+                raise UploadError('CONFIGURED_ROOT_MISSING', False)
+            for name in target_path.relative_to(root_path).parts:
+                child = self.child(client, current['id'], name)
+                if child is None:
+                    checked(client.fs_mkdir({'cname': name, 'pid': current['id']}, timeout=30))
+                    child = self.child(client, current['id'], name)
+                if child is None or child['type'] != 'dir':
+                    raise UploadError('TARGET_FOLDER_UNAVAILABLE')
+                current = child
+            return {'id': current['id'], 'client': client, 'account': account}
+        except UploadError:
+            raise
+        except Exception:
+            raise UploadError('TARGET_FOLDER_UNAVAILABLE') from None
+
+    @staticmethod
+    def upload(folder, path, name):
+        """Only a provider receipt authorizes successful queue reconciliation."""
+        try:
+            result = checked(folder['client'].upload_file(file=str(path), pid=folder['id'],
+                             filename=name, filesize=path.stat().st_size, partsize=-1, timeout=300))
+            data = result.get('data') or result
+            identifier = (data.get('file_id') or data.get('fid') or data.get('pick_code')
+                          or data.get('pickcode') or result.get('pickcode'))
+            if not identifier:
+                raise UploadError('UPLOAD_RESULT_UNKNOWN')
+            return {'id': folder['account'] + ':' + str(identifier), 'size': path.stat().st_size}
+        except Exception:
+            raise UploadError('UPLOAD_RESULT_UNKNOWN') from None

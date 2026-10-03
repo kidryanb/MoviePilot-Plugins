@@ -1,8 +1,8 @@
 # MoviePilot 下载完成自动上传
 
-版本：`0.1.1`，测试版。
+版本：`0.2.0`，测试版。
 
-监控 MoviePilot 中已经配置的 qBittorrent 和 Transmission。任务完成后，按用户设置的文件夹规则复制上传网盘，保留本地文件和做种任务。
+监控 MoviePilot 中已经配置的 qBittorrent 和 Transmission。任务完成后，按用户设置的文件夹规则直接上传到 115，保留本地文件和做种任务。
 
 ## 当前状态
 
@@ -12,17 +12,17 @@
 
 ## 运行要求
 
-- MoviePilot V3，提供 `app.sdk.services`、一次性任务调度及 `StorageChain.get_file_item_strict`。
+- MoviePilot V3，提供 `app.sdk.services` 和一次性任务调度。
 - 在 MP 中配置并启用 qBittorrent、Transmission 中需要监控的实例。
 - MP 容器能够读取下载器保存的视频文件。
-- 安装并配置对应的 V3 网盘储存插件。当前接口接入范围为 DDSRem 的 `115网盘Plus`、`123云盘` 和 `CloudDrive储存`，三种后端仍需实机验证。
+- 已安装 115 STRM 助手，并在其设置中保存有效 Cookie；使用该插件已经安装的 `p115client` 依赖。
 - 网盘目标根文件夹已经存在。插件只按规则在其下创建需要的子文件夹。
 
-接口在规划阶段依据 MP 的 V3 分支核对。部分早期 V3 构建可能没有严格储存查询接口，此时插件会拒绝上传并显示 `MP_STRICT_STORAGE_QUERY_REQUIRED`，不会退回无法区分“文件不存在”和“查询失败”的接口。
+本版本直接调用 115 客户端，不需要额外安装网盘储存插件。当前只支持 115。
 
 ## 安装
 
-在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.1.1 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.1.1)也可以用于本地仓库联调：
+在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.2.0 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.2.0)也可以用于本地仓库联调：
 
 1. 解压源码，并将整个仓库映射进 MP 容器，例如 `/config/local-plugins/download-cloud-upload`。
 2. 按 MP 的本地插件仓库配置，将该路径加入 `PLUGIN_LOCAL_REPO_PATHS`。
@@ -31,19 +31,15 @@
 
 本插件没有额外的 Python 依赖清单，使用 Python 标准库与 MP 已有依赖。不要在 Windows 上直接运行插件入口文件；它需要 MP 宿主。
 
-## 网盘登录与授权
+## 复用 STRM 助手授权
 
-设置页的“打开网盘配置（我的插件）”按钮进入 MP 插件页。找到对应网盘储存插件，打开其设置并完成授权：
+在 115 STRM 助手中完成登录并保存设置，然后重新打开本插件设置。授权提示会显示是否读取到完整 Cookie；它只检查配置完整性，不代表网盘已验证登录成功。
 
-- 115：先安装 DDSRem 的 `115网盘储存`。在本插件设置窗口底部点击“查看数据”，选择 `扫码登录115 / 重新生成二维码`，使用 115 手机 App 扫码并确认，再点击“检查登录并保存授权”。Cookie 自动写入 `115网盘储存`，并启用该插件；对应储存类型为 `115网盘Plus`。
-- 123：在对应 `123云盘` 储存插件中配置账号并启用。
-- CloudDrive2：先在 CloudDrive 服务中登录网盘，再配置并启用 MP 的 CloudDrive 储存插件。
+读取字段为 `P115StrmHelper.cookies`，通过 MP 公开插件管理接口获取。上传操作会读取最新配置，不改写 STRM 助手设置，也不将 Cookie 复制到本插件配置、上传数据库或 GitHub。当前插件没有扫码、手动填写 Cookie 和储存选择入口。
 
-DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem-Dev/MoviePilot-Plugins)。配置后重新打开本插件设置，检查“目标网盘储存”下拉列表。
+DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem-Dev/MoviePilot-Plugins)。未找到 Cookie 时显示 `115_STRM_COOKIE_REQUIRED`；缺少其客户端依赖时显示 `115_STRM_CLIENT_REQUIRED`。
 
-二维码五分钟后失效。二维码会话和待交接的 Cookie 只保留在内存，重启后需要重新扫码。Cookie 保存在 115 储存插件原有配置中，不写入上传队列或 GitHub，不在任务页显示。扫码后需手动点击检查按钮，当前版本没有自动轮询。
-
-升级到 `0.1.1` 后，关闭旧设置窗口，再重新打开；原有文件夹规则和上传队列保留。
+升级到 `0.2.0` 后关闭旧设置窗口再重新打开。原有 115 文件夹规则和上传队列保留；旧版本中配置的其他网盘任务会停止处理并显示 `ONLY_115_SUPPORTED`。旧储存后端生成的回执不能自动证明新版账号身份，同名文件无法确认时会报告冲突，不重新覆盖。
 
 ## 配置文件夹
 
@@ -54,8 +50,7 @@ DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem
 | 适用下载器 | 全部所选下载器 | 也可以仅用于某一个实例 |
 | 下载器保存文件夹 | `/data/tv` | 下载器返回的路径前缀 |
 | MP 可读取文件夹 | `/downloads/tv` | 同一批文件在 MP 容器中可见的位置 |
-| 目标网盘储存 | `115网盘Plus` | 复用对应储存插件账号配置 |
-| 网盘目标文件夹 | `/影视/电视剧` | 用户自行设置的上传位置 |
+| 115 目标文件夹 | `/影视/电视剧` | 用户自行设置的上传位置 |
 
 下载器返回 `/data/tv/某剧/Season 01/第01集.mkv` 时，插件读取 `/downloads/tv/某剧/Season 01/第01集.mkv`，上传为 `/影视/电视剧/某剧/Season 01/第01集.mkv`。
 
@@ -85,11 +80,11 @@ QB 使用剩余字节、完成进度和原始任务状态判断。Transmission �
 
 ## 核对与冲突
 
-插件保存本地 SHA-256 和上传回执。网盘有同名文件时，不能仅凭同名或同大小认为内容一致。首版储存投影没有通用远端内容哈希，因此原本就在网盘中、又没有本插件可信回执的同名文件会显示冲突。
+插件保存本地 SHA-256 和上传回执。网盘有同名文件时，不能仅凭同名或同大小认为内容一致。当前去重只使用本地内容哈希与本插件可信回执，因此原本就在网盘中、又没有本插件可信回执的同名文件会显示冲突。
 
 两个下载器的文件上传到同一位置时，只有本地内容哈希一致、已有成功回执且远端文件标识一致才跳过第二次上传。
 
-上传接口返回后仍会查询远端，核对文件标识和大小。该核对证明本插件上传回执对应的文件存在，不等于逐字节重新下载验证。CloudDrive2 的最终上传语义依赖其储存插件返回的成功回执，需在实机测试中验证云端已完成。
+上传接口返回后仍会查询远端，核对文件标识和大小。该核对证明本插件上传回执对应的文件存在，不等于逐字节重新下载验证。115 回执包含账号身份，避免不同账号的文件标识碰巧相同而误判。重复同名目录或文件会阻止继续操作。
 
 ## 失败处理
 
@@ -125,13 +120,11 @@ API 使用 MP 的 Bearer 认证，并要求超级管理员。接口位于 `/api/
 | `/backfill` | POST | 提交预览中选择的任务 |
 | `/action` | POST | 处理所选文件记录 |
 | `/mapping` | POST | 只读测试路径映射 |
-| `/115/start` | POST | 生成 115 登录二维码 |
-| `/115/poll` | POST | 检查扫码、获取 Cookie 并写入 115 储存插件 |
 
 真实验收至少包括：宿主加载、启用与停用、页面渲染、QB 小视频上传、Transmission 小视频上传、做种文件保留、网盘文件可读、重启后不重复上传。当前离线结果不能替代这些检查。
 
 ## 参考与许可
 
-实现参考 [MP V3 插件开发指南](https://github.com/jxxghp/MoviePilot-Plugins/blob/main/docs/Plugin_Development.md)、[MP 储存链](https://github.com/jxxghp/MoviePilot/blob/v3/app/chain/storage.py)、[DDSRem 的 V3 储存插件](https://github.com/DDSRem-Dev/MoviePilot-Plugins/tree/main/plugins.v3) 和 [Transmission RPC 文件结构](https://github.com/Trim21/transmission-rpc/blob/master/transmission_rpc/torrent.py)。
+实现参考 [MP V3 插件开发指南](https://github.com/jxxghp/MoviePilot-Plugins/blob/main/docs/Plugin_Development.md)、[STRM 助手配置结构](https://github.com/DDSRem-Dev/MoviePilot-Plugins/blob/main/plugins.v2/p115strmhelper/core/config.py)、[p115client 公开接口](https://github.com/ChenyangGao/p115client/blob/main/p115client/client.py) 和 [Transmission RPC 文件结构](https://github.com/Trim21/transmission-rpc/blob/master/transmission_rpc/torrent.py)。
 
-本仓库新增插件代码按 MIT 许可证提供。第三方 MP 和储存插件遵循各自许可证。本插件通过公开接口调用，不包含参考仓库的上传实现源码。
+本仓库新增插件代码按 MIT 许可证提供。第三方 MP、STRM 助手和客户端遵循各自许可证。插件只调用其公开接口，不包含参考仓库的上传实现源码。

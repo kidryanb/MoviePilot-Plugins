@@ -3,10 +3,10 @@
 from pathlib import Path
 from datetime import datetime
 
-from app.chain.storage import StorageChain
-from app.sdk.services import DownloaderHelper, StorageHelper
+from app.sdk.services import DownloaderHelper
 
 from .core import Torrent, TorrentFile, UploadError, downloader_path
+from .cloud115 import Cloud115
 
 
 def field(value, *names, default=None):
@@ -77,41 +77,13 @@ def normalize_member(kind: str, raw) -> TorrentFile:
 class MPGateway:
     """Translate MP runtime services at the plugin boundary, without credentials."""
 
-    SUPPORTED_STORAGES = {'115网盘Plus', '123云盘', 'CloudDrive储存'}
-
     def __init__(self):
-        self.storage = StorageChain()
-
-    @staticmethod
-    def require115():
-        """Require the known storage plugin before offering QR authorization."""
-        from app.sdk.plugin import PluginManager
-        manager = PluginManager()
-        if 'P115Disk' not in manager.running_plugins:
-            raise UploadError('115_STORAGE_PLUGIN_REQUIRED', False)
-        return manager
-
-    def apply115_cookie(self, cookie):
-        """Preserve backend settings and activate the explicitly authorized login."""
-        manager = self.require115()
-        config = dict(manager.get_plugin_config('P115Disk') or {})
-        config.update(cookie=cookie, enabled=True)
-        if not manager.save_plugin_config('P115Disk', config):
-            raise UploadError('115_COOKIE_SAVE_FAILED', False)
-        status = manager.reload_plugin_tree('P115Disk')
-        if getattr(status, 'name', '') != 'ACTIVE':
-            raise UploadError('115_COOKIE_SAVED_RELOAD_REQUIRED', False)
+        self.cloud = Cloud115()
 
     def services(self):
         """Enumerate only the two supported configured downloader types."""
         return {name: service for name, service in DownloaderHelper().get_services().items()
                 if service.type in {'qbittorrent', 'transmission'}}
-
-    def storage_options(self):
-        """Return safe storage summaries; never expose stored authorization data."""
-        return [{'title': storage.name or storage.type, 'value': storage.type}
-                for storage in StorageHelper().get_storagies()
-                if storage.type in self.SUPPORTED_STORAGES]
 
     def _service(self, instance):
         service = self.services().get(instance)
@@ -159,51 +131,18 @@ class MPGateway:
         actual = str(downloader_path(tasks[0].save_path).joinpath(*Path(name.replace('\\', '/')).parts))
         return downloader_path(actual) == downloader_path(full_path)
 
-    def _check_storage(self, storage):
-        if storage not in self.SUPPORTED_STORAGES or storage not in {option['value'] for option in self.storage_options()}:
-            raise UploadError('STORAGE_NOT_CONFIGURED', False)
-        if not callable(getattr(self.storage, 'get_file_item_strict', None)):
-            raise UploadError('MP_STRICT_STORAGE_QUERY_REQUIRED', False)
+    @staticmethod
+    def _check_storage(storage):
+        if storage not in {'115', '115网盘Plus'}:
+            raise UploadError('ONLY_115_SUPPORTED', False)
 
     def lookup(self, storage, target):
-        """Strict lookup preserves the difference between absence and query failure."""
         self._check_storage(storage)
-        try:
-            item = self.storage.get_file_item_strict(storage=storage, path=Path(target))
-            if item is None:
-                return None
-            if item.type != 'file':
-                raise UploadError('REMOTE_PATH_IS_DIRECTORY', False)
-            return {'id': str(item.fileid or item.pickcode or ''), 'size': item.size, 'confirmed': True}
-        except UploadError:
-            raise
-        except Exception:
-            raise UploadError('REMOTE_QUERY_FAILED') from None
+        return self.cloud.lookup(target)
 
     def folder(self, storage, target, root):
-        """Require the configured root to exist; only create descendants under it."""
         self._check_storage(storage)
-        try:
-            parent = self.storage.get_file_item_strict(storage=storage, path=Path(root))
-            if not parent or parent.type != 'dir':
-                raise UploadError('CONFIGURED_ROOT_MISSING', False)
-            item = self.storage.get_folder(storage=storage, path=Path(target))
-            if not item or item.type != 'dir':
-                raise UploadError('TARGET_FOLDER_UNAVAILABLE')
-            return item
-        except UploadError:
-            raise
-        except Exception:
-            raise UploadError('TARGET_FOLDER_UNAVAILABLE') from None
+        return self.cloud.folder(target, root)
 
     def upload(self, folder, path, name):
-        """A returned FileItem is a receipt; the worker still verifies its identity."""
-        try:
-            item = self.storage.upload_file(fileitem=folder, path=path, new_name=name)
-            if not item:
-                raise UploadError('UPLOAD_RESULT_UNKNOWN')
-            return {'id': str(item.fileid or item.pickcode or ''), 'size': item.size}
-        except UploadError:
-            raise
-        except Exception:
-            raise UploadError('UPLOAD_RESULT_UNKNOWN') from None
+        return self.cloud.upload(folder, path, name)

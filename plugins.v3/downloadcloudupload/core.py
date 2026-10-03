@@ -77,6 +77,7 @@ def validate_rules(rules: list[dict]) -> list[dict]:
         if not isinstance(raw, dict):
             raise ValueError('文件夹规则格式错误')
         rule = {key: str(raw.get(key) or '').strip() for key in ('name', 'instance', 'source', 'local', 'storage', 'target')}
+        rule['storage'] = rule['storage'] or '115'
         rule['enabled'] = bool(raw.get('enabled', True))
         if not rule['source'] and not rule['local'] and not rule['target']:
             continue
@@ -379,7 +380,7 @@ class Engine:
         if remote.get('sha256') and remote['sha256'] == digest:
             return True
         receipt = json.loads(row['receipt']) if row['receipt'] else None
-        if (row['attempted'] and receipt and receipt.get('id') and remote.get('id') == receipt['id']
+        if (row['attempted'] and receipt and receipt.get('id') and receipt['id'] in remote.get('ids', [remote.get('id')])
                 and receipt.get('size') == row['size'] and remote.get('confirmed', False)):
             return True
         candidates = self.store.rows("SELECT mapping,receipt,digest FROM files WHERE state IN ('success','already_exists') AND digest=?", (digest,))
@@ -387,7 +388,7 @@ class Engine:
             old = json.loads(candidate['mapping'])
             proof = json.loads(candidate['receipt']) if candidate['receipt'] else None
             if (old['storage'] == json.loads(row['mapping'])['storage'] and old['target'] == json.loads(row['mapping'])['target']
-                    and proof and proof.get('id') and proof['id'] == remote.get('id') and remote.get('confirmed', False)):
+                    and proof and proof.get('id') and proof['id'] in remote.get('ids', [remote.get('id')]) and remote.get('confirmed', False)):
                 return True
         return False
 
