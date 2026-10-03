@@ -1,6 +1,6 @@
 # MoviePilot 下载完成自动上传
 
-版本：`0.2.0`，测试版。
+版本：`0.2.1`，测试版。
 
 监控 MoviePilot 中已经配置的 qBittorrent 和 Transmission。任务完成后，按用户设置的文件夹规则直接上传到 115，保留本地文件和做种任务。
 
@@ -22,7 +22,7 @@
 
 ## 安装
 
-在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.2.0 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.2.0)也可以用于本地仓库联调：
+在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.2.1 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.2.1)也可以用于本地仓库联调：
 
 1. 解压源码，并将整个仓库映射进 MP 容器，例如 `/config/local-plugins/download-cloud-upload`。
 2. 按 MP 的本地插件仓库配置，将该路径加入 `PLUGIN_LOCAL_REPO_PATHS`。
@@ -44,6 +44,12 @@ DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem
 ## 配置文件夹
 
 在设置页填写规则，点击“加入或更新规则”，最后保存插件设置。可新增、选择、修改或删除多组规则。
+
+点击“选择本地文件夹”或“选择网盘文件夹”，打开目录弹窗。点击文件夹可进入下一级，也可返回上级或回到根目录；点击“选择当前目录”后，路径自动填入对应字段。每页显示 20 个子文件夹，更多目录可翻页。目录读取失败时会显示提示，并禁止选择当前目录。
+
+本地选择器浏览 MoviePilot 主机或容器中的目录，不是浏览器所在电脑的文件夹。下载器保存路径与 MP 挂载路径不同时，“下载器保存文件夹”仍需按下载器实际返回的路径填写。网盘选择器复用 STRM 助手的 Cookie，浏览目录不会创建文件夹或上传文件。弹窗状态和目录列表不会保存到插件配置。
+
+目录选择使用 MP V3 提供的 `window.MoviePilotAPI` 请求客户端，沿用宿主登录状态。更新插件后，关闭旧设置窗口再重新打开。
 
 | 设置项 | 示例 | 用途 |
 | --- | --- | --- |
@@ -117,6 +123,7 @@ API 使用 MP 的 Bearer 认证，并要求超级管理员。接口位于 `/api/
 | --- | --- | --- |
 | `/check` | POST | 提交立即检查 |
 | `/preview` | POST | 生成只读补传列表 |
+| `/folders` | POST | 只读浏览 MP 本地或 115 网盘目录 |
 | `/backfill` | POST | 提交预览中选择的任务 |
 | `/action` | POST | 处理所选文件记录 |
 | `/mapping` | POST | 只读测试路径映射 |

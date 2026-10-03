@@ -437,8 +437,53 @@ class DirectCloudTest(unittest.TestCase):
         self.assertFalse(any('/115/' in route['path'] for route in instance.get_api()))
         self.assertNotIn('扫码', json.dumps(instance.get_page(), ensure_ascii=False))
 
+    def test_browse_only_folders_and_empty_directory_without_writes(self):
+        self.items['0'].append({'fid': '90', 'cid': '0', 'n': 'video.mkv', 's': 5})
+        self.assertEqual(self.cloud.browse('/'), {'path': '/', 'parent': '/',
+                         'folders': [{'name': '影视', 'path': '/影视'}]})
+        self.assertEqual(self.cloud.browse('/影视')['folders'], [])
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.uploaded, [])
+
+    def test_browse_missing_file_traversal_and_ambiguous_directory(self):
+        self.items['0'].append({'fid': '90', 'cid': '0', 'n': 'video.mkv', 's': 5})
+        for path in ['/missing', '/video.mkv', '/../影视', '影视']:
+            with self.assertRaises(core.UploadError):
+                self.cloud.browse(path)
+        self.items['0'].append({'cid': '11', 'pid': '0', 'n': '影视'})
+        with self.assertRaisesRegex(core.UploadError, '115_AMBIGUOUS_PATH'):
+            self.cloud.browse('/')
+
+    def test_folder_api_hides_raw_service_errors(self):
+        with patch.object(plugin.Cloud115, 'browse', side_effect=RuntimeError('COOKIE_SECRET')):
+            result = plugin.DownloadCloudUpload().api_folders(plugin.FolderRequest(kind='cloud'))
+        self.assertFalse(result.success)
+        self.assertNotIn('COOKIE_SECRET', result.model_dump_json())
+
 
 class BoundaryTest(unittest.TestCase):
+    def test_local_folder_browser_uses_host_and_filters_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '影视').mkdir()
+            (root / 'video.mkv').write_bytes(b'video')
+            result = plugin.DownloadCloudUpload().api_folders(plugin.FolderRequest(kind='local', path=str(root)))
+            self.assertTrue(result.success)
+            self.assertEqual(result.data.path, str(root.resolve()))
+            self.assertEqual([entry.name for entry in result.data.folders], ['影视'])
+            empty = plugin.local_folders(str(root / '影视'))
+            self.assertEqual(empty['folders'], [])
+            for invalid in [str(root / 'missing'), str(root / 'video.mkv'), 'relative', str(root / '..')]:
+                self.assertFalse(plugin.DownloadCloudUpload().api_folders(plugin.FolderRequest(kind='local', path=invalid)).success)
+
+    def test_picker_transient_state_removed_on_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = plugin.DownloadCloudUpload()
+            instance.test_data_path = Path(directory)
+            with patch.object(plugin, 'MPGateway'):
+                instance.init_plugin({'enabled': False, 'picker_open': True, 'picker_items': [{'name': 'private'}]})
+            self.assertFalse(any(key.startswith('picker_') for key in instance.saved_config))
+
     def test_disabled_initialization_has_no_polling_service(self):
         instance = plugin.DownloadCloudUpload()
         with tempfile.TemporaryDirectory() as folder:

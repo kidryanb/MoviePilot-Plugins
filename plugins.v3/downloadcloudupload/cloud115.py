@@ -2,6 +2,7 @@
 
 from http.cookies import SimpleCookie
 from pathlib import PurePosixPath
+from collections import Counter
 
 from .core import UploadError
 
@@ -109,6 +110,26 @@ class Cloud115:
             raise
         except Exception:
             raise UploadError('REMOTE_QUERY_FAILED') from None
+
+    def browse(self, path):
+        """List selectable directories without creating or changing anything."""
+        client, _ = self.client()
+        current = self.resolve(client, path)
+        if current is None or current['type'] != 'dir':
+            raise UploadError('115_FOLDER_MISSING', False)
+        path = PurePosixPath(path)
+        children = self.entries(client, current['id'])
+        names = Counter(item['name'] for item in children)
+        folders = []
+        for item in children:
+            name = item['name']
+            if item['type'] != 'dir':
+                continue
+            if names[name] != 1 or name in ('', '.', '..') or '/' in name:
+                raise UploadError('115_AMBIGUOUS_PATH', False)
+            folders.append({'name': name, 'path': str(path / name)})
+        return {'path': str(path), 'parent': str(path.parent),
+                'folders': sorted(folders, key=lambda item: item['name'].casefold())}
 
     def folder(self, target, root):
         client, account = self.client()

@@ -19,7 +19,26 @@ from app.api.endpoints.plugin import get_current_active_superuser
 
 from .core import Engine, Store, LABELS, VIDEO_EXTENSIONS, map_file, worker_lease
 from .gateway import MPGateway
-from .cloud115 import strm_cookie
+from .cloud115 import Cloud115, strm_cookie
+from .picker import local_folders, folder_picker
+
+
+class FolderRequest(BaseModel):
+    """Authenticated read-only folder browsing."""
+
+    kind: Literal['local', 'cloud']
+    path: str = Field(default='', max_length=4096)
+
+
+class FolderEntry(BaseModel):
+    name: str
+    path: str
+
+
+class FolderResult(BaseModel):
+    path: str
+    parent: str
+    folders: list[FolderEntry]
 
 
 class ActionRequest(BaseModel):
@@ -77,7 +96,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '监控 QB 和 Transmission，复用 STRM 助手授权，按自设文件夹直接上传115。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.2.0'
+    plugin_version = '0.2.1'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -103,6 +122,7 @@ class DownloadCloudUpload(_PluginBase):
             return
         self._stop = threading.Event()
         self._config = dict(config or {})
+        self._config = {key: value for key, value in self._config.items() if not key.startswith('picker_')}
         self._error = ''
         try:
             interval = int(self._config.get('interval', 60))
@@ -288,7 +308,19 @@ class DownloadCloudUpload(_PluginBase):
                     ('/backfill', self.api_backfill, 'POST', '补传所选任务', Response[ActionResult]),
                     ('/action', self.api_action, 'POST', '处理所选文件', Response[ActionResult]),
                     ('/mapping', self.api_mapping, 'POST', '测试文件夹规则', Response[MappingResult]),
+                    ('/folders', self.api_folders, 'POST', '浏览本地或115目录', Response[FolderResult]),
                 ]]
+
+    def api_folders(self, payload: FolderRequest) -> Response[FolderResult]:
+        """Never return file contents, account IDs or credentials."""
+        try:
+            if '\x00' in payload.path:
+                raise ValueError('INVALID_PATH')
+            result = (Cloud115().browse(payload.path or '/') if payload.kind == 'cloud'
+                      else local_folders(payload.path))
+            return Response(success=True, data=FolderResult(**result))
+        except Exception:
+            return Response(success=False, message='无法读取目录，请检查路径、目录权限和 STRM 助手授权。')
 
     def get_form(self):
         """Native folder editor supports adding and deleting arbitrary mappings."""
@@ -340,6 +372,8 @@ class DownloadCloudUpload(_PluginBase):
                     'rule_target': '', 'rule_enabled': True,
                     'check_once': False, 'preview_once': False, 'backfill_once': False,
                     'backfill_keys': [], 'action_ids': [], 'file_action': 'retry', 'retry_once': False}
+        local_button, cloud_button, picker_dialog, picker_defaults = folder_picker(self.__class__.__name__)
+        defaults.update(picker_defaults)
         content = [
             {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal',
              'text': '复制上传并保留做种文件。首次启用跳过已有完成任务；旧任务需先预览再选择补传。'}},
@@ -365,7 +399,10 @@ class DownloadCloudUpload(_PluginBase):
                     [{'title': name, 'value': name} for name in services]),
             control('VTextField', 'rule_source', '下载器保存文件夹', placeholder='/data/tv'),
             control('VTextField', 'rule_local', 'MP 可读取文件夹', placeholder='/downloads/tv'),
+            local_button,
             control('VTextField', 'rule_target', '115目标文件夹', placeholder='/影视/电视剧'),
+            cloud_button,
+            picker_dialog,
             control('VSwitch', 'rule_enabled', '启用该规则'),
             {'component': 'VBtn', 'props': {'onClick': apply_rule, 'class': 'ma-1'}, 'text': '加入或更新规则'},
             {'component': 'VBtn', 'props': {'onClick': reset_rule, 'class': 'ma-1', 'variant': 'outlined'}, 'text': '新增规则'},
