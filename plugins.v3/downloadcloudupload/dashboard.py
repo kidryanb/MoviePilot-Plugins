@@ -13,6 +13,23 @@ STATUS = {'uploading': '上传中', 'verifying': '确认上传结果', 'queued':
           'retry_wait': '等待重试', 'failed': '上传失败', 'conflict': '文件冲突'}
 
 
+def action_button(plugin_id, file_id, action, title, disabled=False):
+    """Submit one visible file and report rejected operations instead of hiding them."""
+    confirmation = ''
+    if action == 'restart':
+        confirmation = "if(!window.confirm('重新上传将从零开始，并先检查远端是否已有文件。正在运行的上传不会被强制中止。是否继续？'))return;"
+    callback = ("async function(){" + confirmation + "try{"
+                "if(!window.MoviePilotAPI)throw new Error('HOST_API_UNAVAILABLE');"
+                f"const response=await window.MoviePilotAPI.post('plugin/{plugin_id}/action',"
+                f"{{action:'{action}',ids:[{int(file_id)}]}},{{feedback:'silent'}});"
+                "if(!response.success || !response.data?.accepted){"
+                "window.alert(response.message || '操作未执行，请刷新后重试');return;}"
+                "window.location.reload();"
+                "}catch(error){window.alert('操作未完成，请刷新任务状态后重试');}}")
+    return {'component': 'VBtn', 'props': {'variant': 'text', 'size': 'small',
+            'disabled': disabled, 'onClick': callback}, 'text': title}
+
+
 def size(value):
     """Format bytes without exposing local or cloud paths."""
     value = max(0, float(value))
@@ -22,7 +39,7 @@ def size(value):
         value /= 1024
 
 
-def queue_page(store):
+def queue_page(store, plugin_id='DownloadCloudUpload'):
     """Show active and pending tasks; old baselines and completed tasks stay hidden."""
     groups = {'active': [], 'pending': [], 'attention': []}
     tasks = store.rows('''SELECT t.* FROM torrents t WHERE EXISTS (
@@ -53,9 +70,14 @@ def queue_page(store):
             text = STATUS[state]
             if state == 'uploading':
                 progress = store.meta('upload_progress:' + str(row['id']), {}) or {}
+                preparing = progress.get('phase') == 'preparing'
                 known = progress.get('total') == row['size'] and row['size'] > 0 and 'sent' in progress
                 sent = max(0, min(row['size'], progress.get('sent', 0))) if known else 0
                 percent = min(100, sent * 100 / row['size']) if known else 0
+                if preparing:
+                    text = '准备上传（文件校验）'
+                elif not known:
+                    text = '上传中（当前线程未提供进度）'
                 if known:
                     text += f' · {percent:.1f}% · {size(sent)} / {size(row["size"])}'
                     if time.time() - progress.get('updated', 0) < 5 and progress.get('speed', 0) > 0:
@@ -64,12 +86,18 @@ def queue_page(store):
                     text += ' · ' + size(row['size'])
                 details.append({'component': 'div', 'props': {'class': 'text-caption mb-2'}, 'text': text})
                 details.append({'component': 'VProgressLinear', 'props': {'model-value': percent,
-                                'indeterminate': not known, 'height': 6, 'rounded': True, 'color': 'primary'}})
+                                'indeterminate': not known or preparing, 'height': 6, 'rounded': True, 'color': 'primary'}})
             else:
                 details.append({'component': 'div', 'props': {'class': 'text-caption'}, 'text': text})
                 if state == 'verifying':
                     details.append({'component': 'VProgressLinear', 'props': {'indeterminate': True,
                                     'height': 6, 'rounded': True, 'color': 'primary'}})
+            details.append({'component': 'div', 'props': {'class': 'd-flex flex-wrap mt-2 mb-2'},
+                            'content': [action_button(plugin_id, row['id'], action, title,
+                                        disabled=(state == 'uploading' and action != 'restart')
+                                        or (action == 'remap' and bool(row['attempted'])))
+                                        for action, title in [('retry', '重试'), ('verify', '核对'),
+                                        ('remap', '重新匹配'), ('restart', '重新上传'), ('ignore', '忽略')]]})
         content.append({'component': 'VCardText', 'props': {'class': 'pt-0'}, 'content': details})
         groups[group].append({'component': 'VCard', 'props': {'class': 'mb-3', 'variant': 'tonal'},
                               'content': content})

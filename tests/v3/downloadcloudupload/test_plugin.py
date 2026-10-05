@@ -392,6 +392,80 @@ class QueueTest(unittest.TestCase):
         self.assertIn('上传失败', serialized)
         self.assertNotIn('INTERNAL_ERROR', serialized)
 
+    def test_restart_clears_old_progress_and_new_upload_reports_bytes(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='uploading', attempted=1)
+        key = 'upload_progress:' + str(row['id'])
+        self.store.set_meta(key, {'sent': 4, 'total': 5})
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        instance._enabled = True
+        result = instance.api_action(plugin.ActionRequest(action='restart', ids=[row['id']]))
+        self.assertTrue(result.success)
+        self.assertTrue(result.data.accepted)
+        self.assertEqual(self.store.meta(key), {})
+        self.assertEqual(self.files()[0]['attempted'], 0)
+        original = self.gateway.upload
+        def upload(folder, path, name, progress=None):
+            initial = self.store.meta(key)
+            self.assertEqual(initial['sent'], 0)
+            self.assertEqual(initial['phase'], 'preparing')
+            progress(2)
+            self.assertEqual(self.store.meta(key)['sent'], 2)
+            progress(3)
+            return original(folder, path, name)
+        self.gateway.upload = upload
+        self.engine.process()
+        self.engine.process()
+        self.assertEqual(self.store.meta(key)['sent'], 5)
+        self.assertEqual(self.store.meta(key)['phase'], 'uploading')
+        self.assertEqual(self.files()[0]['state'], 'verifying')
+
+    def test_restart_does_not_override_old_worker_or_report_empty_success(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='uploading', attempted=1)
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        with core.worker_lease(self.root / 'worker.lock') as acquired:
+            self.assertTrue(acquired)
+            result = instance.api_action(plugin.ActionRequest(action='restart', ids=[row['id']]))
+            self.assertFalse(result.success)
+            self.assertIn('旧上传线程', result.message)
+        self.assertEqual(self.files()[0]['state'], 'uploading')
+        self.assertEqual(self.gateway.uploads, [])
+        result = instance.api_action(plugin.ActionRequest(action='retry', ids=[999]))
+        self.assertFalse(result.success)
+        self.assertFalse(result.data.accepted)
+
+    def test_task_actions_are_in_frontend_and_restart_requires_confirmation(self):
+        self.enqueue()
+        serialized = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        for title in ['重试', '核对', '重新匹配', '重新上传', '忽略']:
+            self.assertIn(title, serialized)
+        self.assertIn('window.confirm', serialized)
+        self.assertIn('plugin/DownloadCloudUpload/action', serialized)
+        self.assertIn('ids:[1]', serialized)
+
+    def test_progress_storage_failure_does_not_interrupt_upload(self):
+        self.enqueue()
+        original_upload = self.gateway.upload
+        original_meta = self.store.set_meta
+        def telemetry(key, value):
+            if isinstance(value, dict) and value.get('phase') == 'uploading':
+                raise RuntimeError('display storage unavailable')
+            return original_meta(key, value)
+        def upload(folder, path, name, progress=None):
+            progress(path.stat().st_size)
+            return original_upload(folder, path, name)
+        self.gateway.upload = upload
+        self.store.set_meta = telemetry
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'success')
+
 
 class DirectCloudTest(unittest.TestCase):
     def setUp(self):

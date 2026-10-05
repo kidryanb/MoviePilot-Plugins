@@ -369,19 +369,26 @@ class Engine:
         # Persist intent before crossing the external-write boundary.
         self.store.update(row['id'], state='uploading', attempted=1, message='')
         progress_key = 'upload_progress:' + str(row['id'])
-        self.store.set_meta(progress_key, {})
+        self.store.set_meta(progress_key, {'sent': 0, 'total': row['size'], 'speed': 0,
+                            'phase': 'preparing', 'updated': time.time()})
         sent, previous_sent, previous_at = 0, 0, time.monotonic()
+        reported = False
 
         def progress(increment):
-            nonlocal sent, previous_sent, previous_at
+            nonlocal sent, previous_sent, previous_at, reported
             sent = max(0, min(row['size'], sent + int(increment)))
             now = time.monotonic()
             elapsed = now - previous_at
-            if elapsed < 1 and sent != row['size']:
+            if reported and elapsed < 1 and sent != row['size']:
                 return
-            self.store.set_meta(progress_key, {'sent': sent, 'total': row['size'],
-                                'speed': max(0, sent - previous_sent) / max(elapsed, 0.001),
-                                'updated': time.time()})
+            try:
+                self.store.set_meta(progress_key, {'sent': sent, 'total': row['size'],
+                                    'speed': max(0, sent - previous_sent) / max(elapsed, 0.001),
+                                    'phase': 'uploading', 'updated': time.time()})
+            except Exception:
+                # Display telemetry must not interrupt an upload already in flight.
+                return
+            reported = True
             previous_sent, previous_at = sent, now
 
         receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name, progress=progress)
@@ -423,7 +430,7 @@ class Engine:
         else:
             self.store.update(row['id'], state='failed', message=code, retries=retries)
 
-    def action(self, ids: list[int], action: str):
+    def action(self, ids: list[int], action: str, allow_stale_upload=False):
         """Perform explicit file actions without discarding successful deduplication."""
         if action not in {'retry', 'ignore', 'remap', 'verify', 'restart'}:
             raise ValueError('未知操作')
@@ -431,15 +438,18 @@ class Engine:
         for file_id in dict.fromkeys(ids):
             rows = self.store.rows('''SELECT f.*,t.instance FROM files f JOIN torrents t
                 ON t.key=f.task_key WHERE f.id=?''', (file_id,))
-            if not rows or rows[0]['state'] in {'success', 'already_exists', 'uploading'}:
+            if not rows or rows[0]['state'] in {'success', 'already_exists'}:
                 continue
             row = rows[0]
+            if row['state'] == 'uploading' and not (action == 'restart' and allow_stale_upload):
+                continue
             if action == 'restart':
                 mapping = json.loads(row['mapping'])
                 if self.gateway.lookup(mapping['storage'], mapping['target']) is not None:
                     continue
                 self.store.update(file_id, attempted=0, receipt=None, state='queued',
                                   message='USER_CONFIRMED_RESTART', next_at=0, retries=0)
+                self.store.set_meta('upload_progress:' + str(file_id), {})
                 changed += 1
                 continue
             if action == 'remap':

@@ -98,7 +98,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.3.1'
+    plugin_version = '0.3.2'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -291,9 +291,17 @@ class DownloadCloudUpload(_PluginBase):
         try:
             with worker_lease(self.get_data_path() / 'worker.lock') as acquired:
                 if not acquired:
-                    return Response(success=False, message='上一实例上传尚未结束，请稍后再试')
-                count = self._engine.action(payload.ids, payload.action)
-                return Response(success=True, data=ActionResult(accepted=True, count=count))
+                    return Response(success=False, message='旧上传线程仍在运行，本次操作未执行。重置插件不会中止上传，请等当前上传结束。')
+                count = self._engine.action(payload.ids, payload.action, allow_stale_upload=True)
+                if not count:
+                    message = ('未重新上传：任务已完成、远端已有文件或任务已失效，请先核对并刷新。'
+                               if payload.action == 'restart' else '任务状态不允许此操作，或没有可处理的文件，请刷新。')
+                    return Response(success=False, message=message, data=ActionResult(accepted=False, count=0))
+                self._schedule('manual', self.check, delay=1)
+                return Response(success=True, message=f'已处理 {count} 个文件',
+                                data=ActionResult(accepted=True, count=count))
+        except Exception:
+            return Response(success=False, message='操作未完成，请检查115连接后刷新任务状态。')
         finally:
             self._engine.lock.release()
 
@@ -351,7 +359,6 @@ class DownloadCloudUpload(_PluginBase):
             auth_status = '未找到115 STRM助手的完整 Cookie，请先在 STRM助手中登录并保存设置。'
             auth_ready = False
         preview = self._engine.store.meta('backfill_preview', []) if self._engine else []
-        files = self._engine.store.rows("SELECT id,name,state FROM files WHERE state NOT IN ('success','already_exists') ORDER BY id DESC LIMIT 200") if self._engine else []
         def control(component, model, label, **props):
             if component == 'VSwitch':
                 return {'component': component, 'props': {'model': model, 'label': label,
@@ -434,12 +441,6 @@ class DownloadCloudUpload(_PluginBase):
                     items=[{'title': f"{entry['instance']}：{entry['title']}" + ('（完成时间未知）' if entry['time_unknown'] else ''),
                             'value': entry['key']} for entry in preview]),
             control('VSwitch', 'backfill_once', '保存后补传所选任务'),
-            control('VSelect', 'action_ids', '选择待处理文件', multiple=True,
-                    items=[{'title': f"#{row['id']} {row['name']}：{LABELS.get(row['state'], row['state'])}", 'value': row['id']} for row in files]),
-            control('VSelect', 'file_action', '文件操作', items=[{'title': title, 'value': value} for title, value in
-                    [('重试或重新核对', 'retry'), ('只重新核对', 'verify'), ('重新匹配目标', 'remap'),
-                     ('确认后端已停止且远端不存在，重新上传', 'restart'), ('忽略', 'ignore')]]),
-            control('VSwitch', 'retry_once', '保存后执行所选文件操作'),
         ]
         return [{'component': 'VForm', 'content': [
             {'component': 'VRow', 'props': {'class': 'ma-0'}, 'content': [
@@ -457,5 +458,5 @@ class DownloadCloudUpload(_PluginBase):
             if not self._error:
                 page.append({'component': 'div', 'props': {'class': 'text-center pa-6'}, 'text': '请先配置并启用插件'})
             return page
-        page.extend(queue_page(self._engine.store))
+        page.extend(queue_page(self._engine.store, self.__class__.__name__))
         return page
