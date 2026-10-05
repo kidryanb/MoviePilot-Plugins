@@ -44,7 +44,7 @@ def folder_picker(plugin_id):
 
     def button(kind, target, title):
         start = '/' if kind == 'cloud' else ''
-        callback = ("function(){picker_kind='" + kind + "';picker_open=true;picker_loading=false;"
+        callback = ("function(){picker_target='" + target + "';picker_kind='" + kind + "';picker_open=true;picker_loading=false;"
                     "picker_valid=false;picker_path='';picker_parent='';picker_serial++;(" + load + ")("
                     + target + " || '" + start + "');}")
         return {'component': 'VBtn', 'props': {'onClick': callback, 'variant': 'tonal',
@@ -89,13 +89,15 @@ def folder_picker(plugin_id):
             {'component': 'VCardActions', 'content': [
                 {'component': 'VSpacer'},
                 {'component': 'VBtn', 'props': {'disabled': '{{ picker_loading || !picker_valid }}',
-                 'color': 'primary', 'onClick': "function(){if(!picker_valid || picker_loading)return;if(picker_kind==='cloud')rule_target=picker_path;else rule_local=picker_path;picker_open=false;picker_valid=false;}"},
+                 'color': 'primary', 'onClick': "function(){if(!picker_valid || picker_loading)return;if(picker_target==='strm_path')strm_path=picker_path;else if(picker_kind==='cloud')rule_target=picker_path;else rule_local=picker_path;picker_open=false;picker_valid=false;}"},
                  'text': '选择当前目录'},
                 {'component': 'VBtn', 'props': {'onClick': cancel}, 'text': '取消'},
             ]},
         ]},
     ]}
-    defaults = {'picker_open': False, 'picker_kind': 'cloud', 'picker_loading': False,
+    defaults = {'picker_open': False, 'picker_kind': 'cloud', 'picker_target': 'rule_target', 'picker_loading': False,
                 'picker_valid': False, 'picker_path': '', 'picker_parent': '', 'picker_items': [],
                 'picker_error': '', 'picker_serial': 0, 'picker_page': 0}
-    return button('local', 'rule_local', '选择本地文件夹'), button('cloud', 'rule_target', '选择网盘文件夹'), dialog, defaults
+    return (button('local', 'rule_local', '选择本地文件夹'),
+            button('cloud', 'rule_target', '选择网盘文件夹'),
+            button('local', 'strm_path', '选择 STRM 本地目录'), dialog, defaults)

@@ -1,14 +1,15 @@
 {
   "DownloadCloudUpload": {
     "name": "下载完成自动上传",
-    "description": "监控 QB 和 Transmission，复用 STRM 助手授权，按自设文件夹直接上传115。",
+    "description": "下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。",
     "labels": "云盘,下载器",
-    "version": "0.2.2",
+    "version": "0.3.0",
     "icon": "cloud.png",
     "author": "kidryanb",
     "level": 1,
     "system_version": ">=3.0.0",
     "history": {
+      "v0.3.0": "新增 STRM 本地目录设置；启用后接管 MP 自动整理，保留原下载路径，关闭时恢复原监控设置。",
       "v0.2.2": "修复新版 p115client 参数不兼容导致网盘目录读取失败。",
       "v0.2.1": "新增115网盘和MP本地文件夹选择弹窗，支持逐级浏览和返回上级。",
       "v0.2.0": "直接上传115，复用115 STRM助手Cookie，移除储存插件依赖和扫码登录。",

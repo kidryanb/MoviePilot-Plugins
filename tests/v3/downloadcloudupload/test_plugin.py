@@ -1,6 +1,7 @@
 """Offline tests with MP service boundaries mocked under the production namespace."""
 
 import hashlib
+from copy import deepcopy
 import importlib
 import json
 import sys
@@ -55,6 +56,14 @@ module('app.chain', __path__=[])
 module('app.chain.storage', StorageChain=lambda: None)
 module('app.schemas', __path__=[])
 module('app.schemas.response', Response=Response)
+
+
+class ConfigChangeEventData(BaseModel):
+    key: set[str]
+
+
+module('app.schemas.event', ConfigChangeEventData=ConfigChangeEventData)
+module('app.schemas.types', EventType=SimpleNamespace(ConfigChanged='config.updated'))
 module('fastapi', Depends=lambda function: function)
 module('app.api', __path__=[])
 module('app.api.endpoints', __path__=[])
@@ -550,6 +559,165 @@ class BoundaryTest(unittest.TestCase):
         self.assertTrue(all(route['dependencies'] for route in routes))
         metadata = json.loads((ROOT / 'package.v3.json').read_text(encoding='utf-8'))
         self.assertEqual(metadata['DownloadCloudUpload']['version'], instance.plugin_version)
+
+
+class OrganizerTest(unittest.TestCase):
+    """Exercise host configuration ownership, restart recovery and plugin lifecycle."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.raw = self.root / 'downloads'
+        self.strm = self.root / 'strm'
+        self.library = self.root / 'library'
+        for folder in (self.raw, self.strm, self.library):
+            folder.mkdir()
+        self.rules = [{'source': '/data', 'local': str(self.raw), 'target': '/影视', 'enabled': True}]
+        self.original = [{'name': '目录1', 'priority': 0, 'storage': 'local',
+                          'download_path': str(self.raw), 'monitor_type': 'downloader',
+                          'monitor_mode': 'fast', 'library_storage': 'local',
+                          'library_path': str(self.library), 'transfer_type': 'copy',
+                          'renaming': True, 'scraping': True, 'notify': True,
+                          'library_type_folder': True, 'library_category_folder': True}]
+        self.store = core.Store(self.root / 'queue.sqlite')
+        self.directories = deepcopy(self.original)
+        self.events = []
+        self.fail_commit = False
+        self.concurrent_row = None
+        self.systemconfig = SimpleNamespace(update_atomically=self.update_atomically)
+        self.eventmanager = SimpleNamespace(send_event=lambda *args: self.events.append(args))
+        self.organizer = plugin.Organizer(self.store, self.systemconfig, self.eventmanager)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def update_atomically(self, key, mutation):
+        self.assertEqual(key, 'Directories')
+        if self.concurrent_row:
+            self.directories.append(self.concurrent_row)
+            self.concurrent_row = None
+        result, value = mutation(None, deepcopy(self.directories))
+        if self.fail_commit:
+            raise RuntimeError('database rollback')
+        self.directories = value
+        return result
+
+    def test_takeover_keeps_download_destination_and_library_policy(self):
+        self.organizer.configure(self.rules, str(self.strm))
+        raw, generated = self.directories
+        self.assertEqual(raw, {**self.original[0], 'monitor_type': None})
+        self.assertEqual(generated['download_path'], str(self.strm.resolve()))
+        self.assertEqual(generated['monitor_type'], 'monitor')
+        self.assertGreater(generated['priority'], raw['priority'])
+        for field in ['library_path', 'renaming', 'scraping', 'notify', 'transfer_type',
+                      'library_type_folder', 'library_category_folder']:
+            self.assertEqual(generated[field], raw[field])
+        event_type, payload = self.events[0]
+        self.assertEqual(event_type, 'config.updated')
+        self.assertEqual(payload.key, {'Directories'})
+        self.assertEqual(self.store.rows('SELECT * FROM torrents'), [])
+
+    def test_restart_is_idempotent_and_disable_restores(self):
+        self.organizer.configure(self.rules, str(self.strm))
+        expected = deepcopy(self.directories)
+        restarted = plugin.Organizer(self.store, self.systemconfig, self.eventmanager)
+        restarted.configure(self.rules, str(self.strm))
+        self.assertEqual(self.directories, expected)
+        self.assertEqual(len(self.events), 1)
+        restarted.configure([])
+        self.assertEqual(self.directories, self.original)
+        self.assertEqual(len(self.events), 2)
+
+    def test_change_strm_path_replaces_owned_monitor(self):
+        self.organizer.configure(self.rules, str(self.strm))
+        other = self.root / 'strm-new'
+        other.mkdir()
+        self.organizer.configure(self.rules, str(other))
+        self.assertEqual(len(self.directories), 2)
+        self.assertEqual(self.directories[1]['download_path'], str(other.resolve()))
+        self.organizer.configure([])
+        self.assertEqual(self.directories, self.original)
+
+    def test_restore_preserves_user_and_concurrent_edits(self):
+        self.organizer.configure(self.rules, str(self.strm))
+        self.directories[0]['library_path'] = str(self.root / 'library-new')
+        self.directories[0]['notify'] = False
+        self.concurrent_row = {'name': '手动添加', 'storage': '115', 'download_path': '/别处'}
+        self.organizer.configure([])
+        self.assertEqual(self.directories[0]['monitor_type'], 'downloader')
+        self.assertFalse(self.directories[0]['notify'])
+        self.assertTrue(self.directories[0]['library_path'].endswith('library-new'))
+        self.assertEqual(self.directories[-1]['name'], '手动添加')
+
+    def test_user_changed_monitor_and_owned_row_are_not_overwritten(self):
+        self.organizer.configure(self.rules, str(self.strm))
+        self.directories[0]['monitor_type'] = 'monitor'
+        self.directories[1]['name'] = '用户修改'
+        expected = deepcopy(self.directories)
+        self.organizer.configure([])
+        self.assertEqual(self.directories, expected)
+
+    def test_rollback_journal_can_recover_without_touching_original(self):
+        self.fail_commit = True
+        with self.assertRaises(RuntimeError):
+            self.organizer.configure(self.rules, str(self.strm))
+        self.assertEqual(self.directories, self.original)
+        self.fail_commit = False
+        self.organizer.configure([])
+        self.assertEqual(self.directories, self.original)
+
+    def test_notify_failure_recovers_committed_directory_changes(self):
+        self.eventmanager.send_event = lambda *args: (_ for _ in ()).throw(RuntimeError('stopped'))
+        with self.assertRaises(RuntimeError):
+            self.organizer.configure(self.rules, str(self.strm))
+        self.assertIsNone(self.directories[0]['monitor_type'])
+        self.eventmanager.send_event = lambda *args: self.events.append(args)
+        self.organizer.configure([])
+        self.assertEqual(self.directories, self.original)
+
+    def test_invalid_overlap_or_missing_path_never_changes_directories(self):
+        nested = self.raw / 'strm'
+        nested.mkdir()
+        for folder in [self.raw, nested, self.root, self.library, self.root / 'missing']:
+            with self.subTest(folder=folder), self.assertRaises(ValueError):
+                self.organizer.configure(self.rules, str(folder))
+            self.assertEqual(self.directories, self.original)
+        self.assertEqual(self.events, [])
+
+    def test_multiple_media_policies_retain_download_priority(self):
+        self.directories[0]['media_type'] = '电影'
+        television = {**self.directories[0], 'name': '电视剧', 'media_type': '电视剧', 'priority': 1}
+        self.directories.append(television)
+        original = deepcopy(self.directories)
+        self.organizer.configure(self.rules, str(self.strm))
+        self.assertEqual([row['media_type'] for row in self.directories], ['电影', '电视剧', '电影', '电视剧'])
+        self.assertTrue(all(row['monitor_type'] is None for row in self.directories[:2]))
+        self.assertTrue(all(row['priority'] > 1 for row in self.directories[2:]))
+        self.organizer.configure([])
+        self.assertEqual(self.directories, original)
+
+    def test_plugin_enable_reload_disable_and_upload_only(self):
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance.systemconfig = self.systemconfig
+        instance.eventmanager = self.eventmanager
+        config = {'enabled': True, 'downloaders': ['qb'], 'rules': self.rules, 'strm_path': str(self.strm)}
+        with patch.object(plugin, 'MPGateway', return_value=FakeGateway()):
+            instance.init_plugin(config)
+            self.assertEqual(instance._error, '')
+            self.assertTrue(instance.get_state())
+            expected = deepcopy(self.directories)
+            instance.stop_service()  # A lifecycle stop is also used during reload.
+            self.assertEqual(self.directories, expected)
+            instance.init_plugin(config)
+            self.assertEqual(self.directories, expected)
+            instance.init_plugin({**config, 'enabled': False, 'rules': 'invalid'})
+            self.assertFalse(instance.get_state())
+            self.assertEqual(self.directories, self.original)
+            instance.init_plugin({**config, 'strm_path': ''})
+            self.assertEqual(instance._error, '')
+            self.assertTrue(instance.get_state())
+            self.assertEqual(self.directories, self.original)
 
 
 if __name__ == '__main__':

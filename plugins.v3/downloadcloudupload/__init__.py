@@ -21,6 +21,7 @@ from .core import Engine, Store, LABELS, VIDEO_EXTENSIONS, map_file, worker_leas
 from .gateway import MPGateway
 from .cloud115 import Cloud115, strm_cookie
 from .picker import local_folders, folder_picker
+from .organizer import Organizer
 
 
 class FolderRequest(BaseModel):
@@ -94,9 +95,9 @@ class DownloadCloudUpload(_PluginBase):
     """Discover completed downloads and upload a durable, source-preserving queue."""
 
     plugin_name = '下载完成自动上传'
-    plugin_desc = '监控 QB 和 Transmission，复用 STRM 助手授权，按自设文件夹直接上传115。'
+    plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.2.2'
+    plugin_version = '0.3.0'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -113,6 +114,7 @@ class DownloadCloudUpload(_PluginBase):
         self._engine = None
         self._error = ''
         self._config = {}
+        self._strm_path = ''
 
     def init_plugin(self, config=None):
         """Validate configuration and schedule work through the host scheduler."""
@@ -125,6 +127,11 @@ class DownloadCloudUpload(_PluginBase):
         self._config = {key: value for key, value in self._config.items() if not key.startswith('picker_')}
         self._error = ''
         try:
+            store = Store(self.get_data_path() / 'queue.sqlite')
+            organizer = Organizer(store, getattr(self, 'systemconfig', None),
+                                  getattr(self, 'eventmanager', None))
+            if not self._config.get('enabled'):
+                self._strm_path = organizer.configure([])
             interval = int(self._config.get('interval', 60))
             stable = int(self._config.get('stable_seconds', 10))
             retries = int(self._config.get('retry_limit', 5))
@@ -140,7 +147,7 @@ class DownloadCloudUpload(_PluginBase):
                 raise ValueError('视频扩展名必须以点开头')
             if not isinstance(excluded, list) or any(not isinstance(word, str) for word in excluded):
                 raise ValueError('排除关键词格式错误')
-            self._engine = Engine(Store(self.get_data_path() / 'queue.sqlite'), gateway,
+            self._engine = Engine(store, gateway,
                                   self._config.get('rules') or [], names,
                                   stable_seconds=stable, retry_limit=retries,
                                   sidecars=bool(self._config.get('sidecars')), stopped=self._stop.is_set,
@@ -149,6 +156,12 @@ class DownloadCloudUpload(_PluginBase):
             if self._enabled and (not names or not self._engine.rules):
                 raise ValueError('请选择下载器并添加文件夹规则')
             if self._enabled:
+                path = self._config.get('strm_path', '')
+                if not isinstance(path, str):
+                    raise ValueError('STRM 本地目录格式错误')
+                monitored_rules = [rule for rule in self._engine.rules
+                                   if not rule['instance'] or rule['instance'] in names]
+                self._strm_path = organizer.configure(monitored_rules, path.strip())
                 self._schedule('initial', self.check, delay=3)
             for flag, method in [('check_once', self.check), ('preview_once', self.preview_backfill),
                                  ('backfill_once', self._backfill_config), ('retry_once', self._retry_config)]:
@@ -365,14 +378,14 @@ class DownloadCloudUpload(_PluginBase):
         }'''
         reset_rule = '''function() {rule_index=null;rule_name='';rule_instance='';rule_source='';
             rule_local='';rule_target='';rule_enabled=true;}'''
-        defaults = {'enabled': False, 'downloaders': [], 'interval': 60, 'stable_seconds': 10,
+        defaults = {'enabled': False, 'strm_path': '', 'downloaders': [], 'interval': 60, 'stable_seconds': 10,
                     'retry_limit': 5, 'sidecars': False, 'extensions': sorted(VIDEO_EXTENSIONS), 'excluded': [],
                     'backfill_days': 0, 'rules': [], 'rule_index': None,
                     'rule_name': '', 'rule_instance': '', 'rule_source': '', 'rule_local': '',
                     'rule_target': '', 'rule_enabled': True,
                     'check_once': False, 'preview_once': False, 'backfill_once': False,
                     'backfill_keys': [], 'action_ids': [], 'file_action': 'retry', 'retry_once': False}
-        local_button, cloud_button, picker_dialog, picker_defaults = folder_picker(self.__class__.__name__)
+        local_button, cloud_button, strm_button, picker_dialog, picker_defaults = folder_picker(self.__class__.__name__)
         defaults.update(picker_defaults)
         content = [
             {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal',
@@ -382,6 +395,10 @@ class DownloadCloudUpload(_PluginBase):
             {'component': 'VBtn', 'props': {'href': '/plugins', 'target': '_blank', 'rel': 'noopener',
              'variant': 'tonal'}, 'text': '打开115 STRM助手配置（我的插件）'},
             control('VSwitch', 'enabled', '启用插件'),
+            {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal',
+             'text': '填写 STRM 本地目录后，启用即接管自动整理：原目录继续用于下载及上传，MP 改为监控 STRM；关闭插件或清空此项恢复原设置。分类、重命名和刮削沿用 MP 目录设置。留空仅上传。'}},
+            control('VTextField', 'strm_path', 'STRM 本地目录（115 STRM 助手输出目录）', placeholder='/media/strm'),
+            strm_button,
             control('VSelect', 'downloaders', '监控下载器', items=services, multiple=True, chips=True),
             control('VTextField', 'interval', '检查周期（秒）', type='number', min=30, max=3600),
             control('VTextField', 'stable_seconds', '文件稳定等待（秒）', type='number', min=1, max=3600),
@@ -437,6 +454,9 @@ class DownloadCloudUpload(_PluginBase):
                  'text': '直接上传到115，自动复用115 STRM助手已保存的 Cookie。'}}]
         if self._error:
             page.append({'component': 'VAlert', 'props': {'type': 'error', 'text': self._error}})
+        if self._strm_path:
+            page.append({'component': 'VAlert', 'props': {'type': 'info',
+                         'text': f'MP 自动整理已接管，STRM 监控目录：{self._strm_path}'}})
         if not self._engine:
             return page
         page.extend([
