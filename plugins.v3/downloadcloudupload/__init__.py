@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import sqlite3
 from typing import Literal
 
 from apscheduler.triggers.interval import IntervalTrigger
@@ -98,7 +99,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.3.4'
+    plugin_version = '0.3.5'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -116,6 +117,7 @@ class DownloadCloudUpload(_PluginBase):
         self._error = ''
         self._config = {}
         self._strm_path = ''
+        self._page_cache = []
 
     def init_plugin(self, config=None):
         """Validate configuration and schedule work through the host scheduler."""
@@ -349,6 +351,8 @@ class DownloadCloudUpload(_PluginBase):
                     ('/backfill', self.api_backfill, 'POST', '补传所选任务', Response[ActionResult]),
                     ('/action', self.api_action, 'POST', '处理所选文件', Response[ActionResult]),
                     ('/mapping', self.api_mapping, 'POST', '测试文件夹规则', Response[MappingResult]),
+                    ('/status', self.api_status, 'GET', '刷新上传任务状态', Response[ActionResult]),
+                    ('/confirmation', self.api_confirmation, 'POST', '确认重新上传', Response[ActionResult]),
                     ('/folders', self.api_folders, 'POST', '浏览本地或115目录', Response[FolderResult]),
                 ]]
 
@@ -482,5 +486,26 @@ class DownloadCloudUpload(_PluginBase):
         else:
             with worker_lease(self.get_data_path() / 'worker.lock') as acquired:
                 worker_busy = not acquired
-        page.extend(queue_page(self._engine.store, self.__class__.__name__, worker_busy=worker_busy))
+        try:
+            snapshot = self._engine.store.page_snapshot()
+            self._page_cache = queue_page(snapshot, self.__class__.__name__, worker_busy=worker_busy)
+        except sqlite3.OperationalError:
+            page.append({'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal'},
+                         'text': '任务状态正在更新，请稍后刷新。'})
+        page.extend(self._page_cache)
         return page
+
+    def api_status(self) -> Response[ActionResult]:
+        """Let the native page emit its refresh event without starting cloud work."""
+        return Response(success=True, data=ActionResult(accepted=True))
+
+    def api_confirmation(self, payload: ActionRequest) -> Response[ActionResult]:
+        """Display a second explicit restart button; this request never starts work."""
+        if not self._engine or payload.action != 'restart':
+            return Response(success=False, message='请先配置插件')
+        count = 0
+        for file_id in set(payload.ids):
+            if self._engine.store.rows('SELECT id FROM files WHERE id=?', (file_id,)):
+                self._engine.store.set_meta('restart_confirmation:' + str(file_id), time.time() + 60)
+                count += 1
+        return Response(success=bool(count), data=ActionResult(accepted=bool(count), count=count))

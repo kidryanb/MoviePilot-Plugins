@@ -6,6 +6,8 @@ import importlib
 import json
 import sys
 import tempfile
+import sqlite3
+import time
 import types
 import unittest
 from pathlib import Path
@@ -446,9 +448,61 @@ class QueueTest(unittest.TestCase):
         serialized = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
         for title in ['重试', '核对', '重新匹配', '重新上传', '忽略']:
             self.assertIn(title, serialized)
-        self.assertIn('window.confirm', serialized)
+        self.assertNotIn('onClick', serialized)
+        self.assertIn('plugin/DownloadCloudUpload/confirmation', serialized)
         self.assertIn('plugin/DownloadCloudUpload/action', serialized)
-        self.assertIn('ids:[1]', serialized)
+        self.assertIn('"ids": [1]', serialized)
+
+    def test_page_snapshot_does_not_wait_for_upload_writer(self):
+        self.enqueue()
+        row = self.files()[0]
+        with self.store.connect() as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            writer.execute("UPDATE files SET state='uploading' WHERE id=?", (row['id'],))
+            started = time.monotonic()
+            snapshot = self.store.page_snapshot()
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertEqual(snapshot.files[0]['state'], 'queued')
+            self.assertIn('待上传 1', json.dumps(plugin.queue_page(snapshot), ensure_ascii=False))
+        self.assertEqual(self.store.page_snapshot().files[0]['state'], 'uploading')
+
+    def test_page_locked_database_returns_previous_queue_promptly(self):
+        self.enqueue()
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        previous = instance.get_page()
+        db = sqlite3.connect(self.store.path)
+        try:
+            db.execute('PRAGMA journal_mode=DELETE')
+            db.execute('BEGIN EXCLUSIVE')
+            started = time.monotonic()
+            page = instance.get_page()
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertIn('任务状态正在更新', json.dumps(page, ensure_ascii=False))
+            self.assertEqual(page[1:], previous)
+        finally:
+            db.rollback()
+            db.close()
+
+    def test_restart_confirmation_never_uploads_and_uses_native_events(self):
+        self.enqueue()
+        instance = plugin.DownloadCloudUpload()
+        instance._engine = self.engine
+        response = instance.api_confirmation(plugin.ActionRequest(action='restart', ids=[1]))
+        self.assertTrue(response.success)
+        page = json.dumps(plugin.queue_page(self.store.page_snapshot()), ensure_ascii=False)
+        self.assertIn('确认重新上传', page)
+        self.assertEqual(self.gateway.uploads, [])
+
+    def test_preparation_percent_is_separate_from_uploaded_bytes(self):
+        self.enqueue()
+        self.store.update(1, state='uploading')
+        self.store.set_meta('upload_progress:1', {'phase': 'preparing', 'prepared': 2,
+                                                'sent': 0, 'total': 5})
+        page = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        self.assertIn('文件校验） · 40.0%', page)
+        self.assertIn('"indeterminate": false', page)
 
     def test_progress_storage_failure_does_not_interrupt_upload(self):
         self.enqueue()
@@ -667,6 +721,23 @@ class DirectCloudTest(unittest.TestCase):
             self.cloud.upload(folder, path, path.name, progress=increments.append)
             self.assertNotIn('reporthook', self.uploaded[-1])
             self.assertNotIn('make_reporthook', self.uploaded[-1])
+
+    def test_sdk_sha1_scan_reports_preparation_and_instant_receipt(self):
+        prepared, transferred = [], []
+        def progress(increment):
+            transferred.append(increment)
+        progress.preparing = prepared.append
+        def instant(**kwargs):
+            self.assertEqual(kwargs['filesha1'], hashlib.sha1(b'video').hexdigest().upper())
+            return {'state': True, 'reuse': True, 'data': {'file_id': '90'}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'video.mkv'
+            path.write_bytes(b'video')
+            folder = {'client': SimpleNamespace(upload_file=instant), 'id': '10', 'account': 'account'}
+            receipt = self.cloud.upload(folder, path, path.name, progress=progress)
+        self.assertEqual(prepared, [0, 5])
+        self.assertEqual(transferred, [])
+        self.assertTrue(receipt['instant'])
 
     def test_p115oss_delegate_receives_incremental_progress(self):
         def backend(*, reporthook=None, **kwargs):

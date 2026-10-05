@@ -140,14 +140,18 @@ def signature(path: Path):
     return [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]
 
 
-def digest_file(path: Path, stopped=lambda: False):
+def digest_file(path: Path, stopped=lambda: False, progress=None):
     """Hash file contents in bounded chunks, allowing stop between reads."""
     digest = hashlib.sha256()
+    read = 0
     with path.open('rb') as source:
         while chunk := source.read(4 * 1024 * 1024):
             if stopped():
                 raise UploadError('STOPPED')
             digest.update(chunk)
+            read += len(chunk)
+            if progress:
+                progress(read)
     return digest.hexdigest()
 
 
@@ -158,6 +162,7 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         with self.connect() as db:
+            db.execute('PRAGMA journal_mode=WAL')
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS torrents (
@@ -192,6 +197,20 @@ class Store:
         """Return detached dictionaries from a read transaction."""
         with self.connect() as db:
             return [dict(row) for row in db.execute(sql, parameters)]
+
+    def page_snapshot(self):
+        """Read the entire display in one bounded, read-only transaction."""
+        db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.2)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute('BEGIN')
+            tasks = [dict(row) for row in db.execute('SELECT * FROM torrents ORDER BY updated DESC')]
+            files = [dict(row) for row in db.execute('SELECT * FROM files ORDER BY id')]
+            metadata = {row['key']: json.loads(row['value']) for row in db.execute(
+                "SELECT key,value FROM meta WHERE key LIKE 'upload_progress:%' OR key LIKE 'restart_request:%' OR key LIKE 'restart_confirmation:%'")}
+            return PageSnapshot(tasks, files, metadata)
+        finally:
+            db.close()
 
     def meta(self, key, default=None):
         """Read a baseline or timestamp value."""
@@ -231,6 +250,26 @@ class Store:
             if 'state' in values:
                 db.execute('INSERT INTO events(file_id,state,message,created) VALUES (?,?,?,?)',
                            (file_id, values['state'], values.get('message', ''), time.time()))
+
+
+class PageSnapshot:
+    """Detached queue data; rendering never opens the writer's database."""
+
+    def __init__(self, tasks, files, metadata):
+        self.tasks, self.files, self.metadata = tasks, files, metadata
+
+    def rows(self, sql, parameters=()):
+        if parameters:
+            return [row for row in self.files if row['task_key'] == parameters[0]]
+        visible = {'uploading', 'verifying', 'queued', 'waiting_complete', 'waiting_source',
+                   'retry_wait', 'failed', 'conflict'}
+        keys = {row['task_key'] for row in self.files if row['state'] in visible}
+        populated = {row['task_key'] for row in self.files}
+        return [row for row in self.tasks if row['key'] in keys or
+                (row['state'] == 'waiting_complete' and row['key'] not in populated)]
+
+    def meta(self, key, default=None):
+        return self.metadata.get(key, default)
 
 
 class Engine:
@@ -399,7 +438,20 @@ class Engine:
         if not self.gateway.ready(row['instance'], row['hash'], row['name'], row['size'], row['full_path']):
             self.store.update(row['id'], state='waiting_complete', message='TASK_NOT_READY', next_at=time.time() + 60)
             return False
-        digest = row['digest'] or digest_file(path, self.stopped)
+        hash_updated = 0
+        def hash_progress(read):
+            nonlocal hash_updated
+            now = time.monotonic()
+            if now - hash_updated < 1 and read != row['size']:
+                return
+            hash_updated = now
+            try:
+                self.store.set_meta('upload_progress:' + str(row['id']),
+                                    {'phase': 'hashing', 'prepared': read, 'total': row['size'],
+                                     'updated': time.time(), 'can_stop': False})
+            except Exception:
+                pass
+        digest = row['digest'] or digest_file(path, self.stopped, hash_progress)
         if signature(path) != sig:
             raise UploadError('SOURCE_CHANGED', False)
         self.store.update(row['id'], digest=digest)
@@ -468,6 +520,25 @@ class Engine:
             self.store.set_meta(progress_key, current)
 
         progress.set_supported = set_supported
+        prepared_at = 0
+        def preparing(read):
+            nonlocal prepared_at
+            if self.stopped():
+                raise UploadStopped()
+            request = self.store.meta('restart_request:' + str(row['id']), {}) or {}
+            if request.get('attempt') == attempt:
+                raise UploadStopped()
+            now = time.monotonic()
+            if now - prepared_at < 1 and read != row['size']:
+                return
+            prepared_at = now
+            try:
+                self.store.set_meta(progress_key, {'sent': 0, 'prepared': read, 'total': row['size'],
+                                    'speed': 0, 'phase': 'preparing', 'updated': time.time(),
+                                    'attempt': attempt, 'can_stop': can_stop})
+            except Exception:
+                pass
+        progress.preparing = preparing
 
         try:
             receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name, progress=progress)

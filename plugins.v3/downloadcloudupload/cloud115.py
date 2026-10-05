@@ -3,6 +3,7 @@
 from http.cookies import SimpleCookie
 from pathlib import PurePosixPath
 from collections import Counter
+import hashlib
 
 from .core import UploadError, UploadStopped
 
@@ -182,6 +183,17 @@ class Cloud115:
                 notify = getattr(progress, 'set_supported', None)
                 if callable(notify):
                     notify(bool(options))
+            prepare = getattr(progress, 'preparing', None)
+            # Give the SDK a complete SHA1 so its hidden local scan has visible progress.
+            if callable(prepare):
+                digest, read = hashlib.sha1(), 0
+                prepare(0)
+                with path.open('rb') as source:
+                    while chunk := source.read(4 * 1024 * 1024):
+                        digest.update(chunk)
+                        read += len(chunk)
+                        prepare(read)
+                options['filesha1'] = digest.hexdigest().upper()
             result = checked(folder['client'].upload_file(file=str(path), pid=folder['id'],
                              filename=name, filesize=path.stat().st_size, partsize=-1, timeout=300, **options))
             data = result.get('data') or result
@@ -189,7 +201,8 @@ class Cloud115:
                           or data.get('pickcode') or result.get('pickcode'))
             if not identifier:
                 raise UploadError('UPLOAD_RESULT_UNKNOWN')
-            return {'id': folder['account'] + ':' + str(identifier), 'size': path.stat().st_size}
+            return {'id': folder['account'] + ':' + str(identifier), 'size': path.stat().st_size,
+                    'instant': bool(result.get('reuse'))}
         except UploadStopped:
             raise
         except Exception:
