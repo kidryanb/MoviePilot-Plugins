@@ -371,11 +371,21 @@ class DirectCloudTest(unittest.TestCase):
             with self.assertRaisesRegex(core.UploadError, '115_STRM_COOKIE_REQUIRED'):
                 cloud_module.strm_cookie()
         calls = []
-        factory = lambda cookie, **kwargs: calls.append(kwargs) or self.client
+        def factory(cookies=None, app='', app_id=0, console_qrcode=True):
+            calls.append(cookies)
+            return self.client
         with patch.object(cloud_module, 'strm_cookie', return_value=('UID=123; CID=c; SEID=s', '123')):
             with patch.dict(sys.modules, {'p115client': SimpleNamespace(P115Client=factory)}):
-                cloud_module.Cloud115().client()
-        self.assertEqual(calls, [{'check_for_relogin': False}])
+                client, account = cloud_module.Cloud115().client()
+        self.assertEqual(calls, ['UID=123; CID=c; SEID=s'])
+        self.assertIs(client, self.client)
+        self.assertEqual(account, '123')
+
+    def test_missing_cookie_never_constructs_client(self):
+        with patch.object(cloud_module, 'strm_cookie', side_effect=core.UploadError('115_STRM_COOKIE_REQUIRED', False)):
+            with patch.dict(sys.modules, {'p115client': SimpleNamespace(P115Client=None)}):
+                with self.assertRaisesRegex(core.UploadError, '115_STRM_COOKIE_REQUIRED'):
+                    cloud_module.Cloud115().client()
 
     def test_query_failure_and_parent_fallback_are_not_absence(self):
         for response in [{'state': False}, {'state': True, 'path': [{'cid': '0'}], 'data': [], 'count': 0, 'offset': 0}]:

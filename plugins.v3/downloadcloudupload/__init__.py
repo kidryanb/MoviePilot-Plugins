@@ -96,7 +96,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '监控 QB 和 Transmission，复用 STRM 助手授权，按自设文件夹直接上传115。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.2.1'
+    plugin_version = '0.2.2'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'

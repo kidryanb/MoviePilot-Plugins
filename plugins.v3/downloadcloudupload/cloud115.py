@@ -37,7 +37,7 @@ class Cloud115:
         cookie, account = strm_cookie()
         try:
             from p115client import P115Client
-            return P115Client(cookie, check_for_relogin=False), account
+            return P115Client(cookie), account
         except ImportError:
             raise UploadError('115_STRM_CLIENT_REQUIRED', False) from None
         except Exception:
