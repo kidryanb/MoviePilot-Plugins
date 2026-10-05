@@ -420,7 +420,7 @@ class QueueTest(unittest.TestCase):
         self.engine.process()
         self.engine.process()
         self.assertEqual(self.store.meta(key)['sent'], 5)
-        self.assertEqual(self.store.meta(key)['phase'], 'uploading')
+        self.assertEqual(self.store.meta(key)['phase'], 'submitted')
         self.assertEqual(self.files()[0]['state'], 'verifying')
 
     def test_restart_does_not_override_old_worker_or_report_empty_success(self):
@@ -585,6 +585,45 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(self.files()[0]['state'], 'success')
         self.assertFalse(self.store.meta('restart_request:' + str(file_id)))
         self.assertEqual(len(self.gateway.uploads), 1)
+
+    def test_verification_displays_submission_progress_without_claiming_success(self):
+        self.enqueue()
+        self.engine.process()
+        self.engine.process()
+        row = self.files()[0]
+        self.assertEqual(row['state'], 'verifying')
+        self.assertEqual(self.store.meta('upload_progress:' + str(row['id']))['phase'], 'submitted')
+        serialized = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        self.assertIn('上传中 0', serialized)
+        self.assertIn('待核对 1', serialized)
+        self.assertIn('上传提交完成 · 100% · 等待115核对', serialized)
+        self.assertNotIn('"indeterminate": true', serialized)
+        self.assertNotIn('上传成功', serialized)
+
+    def test_unknown_verification_never_invents_completed_progress(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='verifying', attempted=1, receipt=None)
+        serialized = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        self.assertIn('上传结果待核对（尚无可靠进度）', serialized)
+        self.assertNotIn('100%', serialized)
+        self.assertNotIn('"indeterminate": true', serialized)
+        self.store.set_meta('upload_progress:' + str(row['id']), {'sent': 2, 'total': 5})
+        serialized = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        self.assertIn('已发送 40.0%', serialized)
+        self.assertNotIn('100%', serialized)
+
+    def test_completed_receipt_survives_progress_write_failure(self):
+        self.enqueue()
+        original_meta = self.store.set_meta
+        def telemetry(key, value):
+            if isinstance(value, dict) and value.get('phase') == 'submitted':
+                raise RuntimeError('telemetry unavailable')
+            return original_meta(key, value)
+        self.store.set_meta = telemetry
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'success')
+        self.assertTrue(self.files()[0]['receipt'])
 
 
 class DirectCloudTest(unittest.TestCase):

@@ -480,6 +480,14 @@ class Engine:
             raise UploadError('SOURCE_CHANGED_AFTER_UPLOAD', False)
         self.store.update(row['id'], state='verifying', receipt=json.dumps(receipt) if receipt else None,
                           message='AWAITING_REMOTE_CONFIRMATION', next_at=0)
+        if receipt and receipt.get('id') and receipt.get('size') == row['size']:
+            try:
+                self.store.set_meta(progress_key, {'sent': row['size'], 'total': row['size'], 'speed': 0,
+                                    'phase': 'submitted', 'updated': time.time(),
+                                    'attempt': attempt, 'can_stop': False})
+            except Exception:
+                # The durable receipt above still proves submission if telemetry fails.
+                pass
         return True
 
     def _proof(self, row, remote, digest):

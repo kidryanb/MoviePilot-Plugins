@@ -1,10 +1,12 @@
 """Compact upload queue built from the plugin's durable file states."""
 
 import time
+import json
 from pathlib import PurePosixPath
 
 
-ACTIVE = {'uploading', 'verifying'}
+ACTIVE = {'uploading'}
+VERIFYING = {'verifying'}
 PENDING = {'queued', 'waiting_complete', 'waiting_source', 'retry_wait'}
 FINISHED = {'success', 'already_exists'}
 ATTENTION = {'failed', 'conflict'}
@@ -41,7 +43,7 @@ def size(value):
 
 def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
     """Show active and pending tasks; old baselines and completed tasks stay hidden."""
-    groups = {'active': [], 'pending': [], 'attention': []}
+    groups = {'active': [], 'verifying': [], 'pending': [], 'attention': []}
     tasks = store.rows('''SELECT t.* FROM torrents t WHERE EXISTS (
         SELECT 1 FROM files f WHERE f.task_key=t.key AND f.state IN
         ('uploading','verifying','queued','waiting_complete','waiting_source','retry_wait','failed','conflict'))
@@ -49,8 +51,9 @@ def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
         SELECT 1 FROM files f WHERE f.task_key=t.key)) ORDER BY t.updated DESC''')
     for task in tasks:
         files = store.rows('SELECT * FROM files WHERE task_key=? ORDER BY id', (task['key'],))
-        visible = [row for row in files if row['state'] in ACTIVE | PENDING | ATTENTION]
+        visible = [row for row in files if row['state'] in ACTIVE | VERIFYING | PENDING | ATTENTION]
         group = ('active' if any(row['state'] in ACTIVE for row in visible) else
+                 'verifying' if any(row['state'] in VERIFYING for row in visible) else
                  'pending' if not files or any(row['state'] in PENDING for row in visible) else 'attention')
         done = sum(row['state'] in FINISHED for row in files)
         content = [{'component': 'VCardTitle', 'props': {'class': 'text-body-1 font-weight-bold',
@@ -59,7 +62,7 @@ def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
         details = []
         if len(files) > 1:
             details.append({'component': 'div', 'props': {'class': 'text-caption mb-2'},
-                            'text': f'{done} / {len(files)} 个文件已上传'})
+                            'text': f'{done} / {len(files)} 个文件已确认'})
         if not files:
             details.append({'component': 'div', 'text': '等待下载完成'})
         for row in visible:
@@ -93,12 +96,30 @@ def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
                 details.append({'component': 'VProgressLinear', 'props': {'model-value': percent,
                                 'indeterminate': not known or preparing, 'height': 6, 'rounded': True, 'color': 'primary'}})
             else:
+                percent = None
+                if state == 'verifying':
+                    try:
+                        receipt = json.loads(row['receipt']) if row['receipt'] else {}
+                    except (ValueError, TypeError):
+                        receipt = {}
+                    submitted = (isinstance(receipt, dict) and receipt.get('id')
+                                 and receipt.get('size') == row['size'] and bool(row['attempted']))
+                    known = progress.get('total') == row['size'] and row['size'] > 0 and 'sent' in progress
+                    if submitted:
+                        percent = 100
+                        text = '上传提交完成 · 100% · 等待115核对'
+                    elif known:
+                        sent = max(0, min(row['size'], progress['sent']))
+                        percent = sent * 100 / row['size']
+                        text = f'结果待核对 · 已发送 {percent:.1f}% · {size(sent)} / {size(row["size"])}'
+                    else:
+                        text = '上传结果待核对（尚无可靠进度）'
                 if stopping:
                     text = '正在核对远端，等待重新上传'
                 details.append({'component': 'div', 'props': {'class': 'text-caption'}, 'text': text})
-                if state == 'verifying':
-                    details.append({'component': 'VProgressLinear', 'props': {'indeterminate': True,
-                                    'height': 6, 'rounded': True, 'color': 'primary'}})
+                if percent is not None:
+                    details.append({'component': 'VProgressLinear', 'props': {'indeterminate': False,
+                                    'model-value': percent, 'height': 6, 'rounded': True, 'color': 'primary'}})
             details.append({'component': 'div', 'props': {'class': 'd-flex flex-wrap mt-2 mb-2'},
                             'content': [action_button(plugin_id, row['id'], action,
                                         ('等待旧上传结束' if legacy_busy else '停止并重新上传')
@@ -112,11 +133,12 @@ def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
         groups[group].append({'component': 'VCard', 'props': {'class': 'mb-3', 'variant': 'tonal'},
                               'content': content})
     page = [{'component': 'div', 'props': {'class': 'd-flex align-center justify-space-between mb-3'},
-             'content': [{'component': 'div', 'text': f'上传中 {len(groups["active"])} · 待上传 {len(groups["pending"])}'},
+             'content': [{'component': 'div', 'text': f'上传中 {len(groups["active"])} · 待上传 {len(groups["pending"])}'
+                          + (f' · 待核对 {len(groups["verifying"])}' if groups['verifying'] else '')},
                          {'component': 'VBtn', 'props': {'variant': 'text', 'size': 'small',
                           'prepend-icon': 'mdi-refresh', 'onClick': 'function(){window.location.reload();}'},
                           'text': '刷新'}]}]
-    for key, title in [('active', '上传中'), ('pending', '待上传'), ('attention', '需处理')]:
+    for key, title in [('active', '上传中'), ('verifying', '等待核对'), ('pending', '待上传'), ('attention', '需处理')]:
         if groups[key]:
             page.append({'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2'}, 'text': title})
             page.extend(groups[key])
