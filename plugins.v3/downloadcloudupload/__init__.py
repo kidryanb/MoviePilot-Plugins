@@ -98,7 +98,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.3.2'
+    plugin_version = '0.3.3'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -286,11 +286,17 @@ class DownloadCloudUpload(_PluginBase):
 
     def api_action(self, payload: ActionRequest) -> Response[ActionResult]:
         """Serialize user changes with the uploading worker."""
-        if not self._engine or not self._engine.lock.acquire(blocking=False):
+        if not self._engine:
+            return Response(success=False, message='请先配置并启用插件')
+        if not self._engine.lock.acquire(blocking=False):
+            if payload.action == 'restart':
+                return self._request_active_restart(payload)
             return Response(success=False, message='上传正在执行，请稍后再试')
         try:
             with worker_lease(self.get_data_path() / 'worker.lock') as acquired:
                 if not acquired:
+                    if payload.action == 'restart':
+                        return self._request_active_restart(payload)
                     return Response(success=False, message='旧上传线程仍在运行，本次操作未执行。重置插件不会中止上传，请等当前上传结束。')
                 count = self._engine.action(payload.ids, payload.action, allow_stale_upload=True)
                 if not count:
@@ -304,6 +310,19 @@ class DownloadCloudUpload(_PluginBase):
             return Response(success=False, message='操作未完成，请检查115连接后刷新任务状态。')
         finally:
             self._engine.lock.release()
+
+    def _request_active_restart(self, payload):
+        """Request cooperative cancellation even when another plugin instance owns the lease."""
+        if len(set(payload.ids)) != 1:
+            return Response(success=False, message='上传中的任务请逐个停止并重新上传')
+        try:
+            accepted = self._engine.request_restart(payload.ids[0])
+        except Exception:
+            return Response(success=False, message='停止请求未保存，请刷新任务状态后重试')
+        if not accepted:
+            return Response(success=False, message='当前上传线程不支持安全停止或已结束，未执行重新上传。请刷新；旧上传线程需等待上传完成。')
+        return Response(success=True, message='已请求停止，线程退出并核对远端后会重新排队。',
+                        data=ActionResult(accepted=True, count=1))
 
     def _retry_config(self):
         """Run a selected operation from the native form."""
@@ -458,5 +477,10 @@ class DownloadCloudUpload(_PluginBase):
             if not self._error:
                 page.append({'component': 'div', 'props': {'class': 'text-center pa-6'}, 'text': '请先配置并启用插件'})
             return page
-        page.extend(queue_page(self._engine.store, self.__class__.__name__))
+        if self._engine.lock.locked():
+            worker_busy = True
+        else:
+            with worker_lease(self.get_data_path() / 'worker.lock') as acquired:
+                worker_busy = not acquired
+        page.extend(queue_page(self._engine.store, self.__class__.__name__, worker_busy=worker_busy))
         return page

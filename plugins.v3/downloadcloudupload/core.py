@@ -8,6 +8,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -30,6 +31,13 @@ class UploadError(Exception):
     def __init__(self, code: str, retryable: bool = True):
         super().__init__(code)
         self.code, self.retryable = code, retryable
+
+
+class UploadStopped(UploadError):
+    """The SDK byte iterator acknowledged a cooperative stop before sending more data."""
+
+    def __init__(self):
+        super().__init__('UPLOAD_STOP_REQUESTED')
 
 
 @dataclass(frozen=True)
@@ -311,6 +319,7 @@ class Engine:
 
     def process(self, budget=1):
         """Advance due files while leaving unavailable tasks out of the hot path."""
+        self.resolve_restarts()
         rows = self.store.rows('''SELECT f.*,t.instance,t.hash,t.title FROM files f
             JOIN torrents t ON t.key=f.task_key WHERE f.state IN
             ('queued','waiting_source','waiting_complete','retry_wait','verifying')
@@ -319,10 +328,55 @@ class Engine:
         for row in rows:
             if self.stopped() or uploads >= budget:
                 break
+            if self.store.meta('restart_request:' + str(row['id'])):
+                continue
             try:
                 uploads += int(self._process(row))
             except Exception as error:
                 self._fail(row, error)
+        self.resolve_restarts()
+
+    def request_restart(self, file_id):
+        """Publish a stop request for the exact capable upload attempt, without its lock."""
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT state FROM files WHERE id=?', (file_id,)).fetchone()
+            raw = db.execute('SELECT value FROM meta WHERE key=?', ('upload_progress:' + str(file_id),)).fetchone()
+            progress = json.loads(raw['value']) if raw else {}
+            if not row or row['state'] != 'uploading' or not progress.get('can_stop') or not progress.get('attempt'):
+                return False
+            request = {'attempt': progress['attempt'], 'requested_at': time.time()}
+            db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',
+                       ('restart_request:' + str(file_id), json.dumps(request)))
+        return True
+
+    def resolve_restarts(self):
+        """Only a worker owning the upload lease can requeue acknowledged stops."""
+        requests = self.store.rows("SELECT key,value FROM meta WHERE key LIKE 'restart_request:%'")
+        for entry in requests:
+            request = json.loads(entry['value'])
+            if not request:
+                continue
+            file_id = int(entry['key'].split(':')[-1])
+            rows = self.store.rows('SELECT * FROM files WHERE id=?', (file_id,))
+            progress = self.store.meta('upload_progress:' + str(file_id), {}) or {}
+            if not rows or progress.get('attempt') != request.get('attempt'):
+                self.store.set_meta(entry['key'], None)
+                continue
+            row = rows[0]
+            if row['state'] == 'uploading':
+                continue
+            if row['message'] == 'USER_REQUESTED_RESTART':
+                try:
+                    changed = self.action([file_id], 'restart')
+                    if not changed:
+                        self.store.update(file_id, state='verifying',
+                                          message='AWAITING_REMOTE_CONFIRMATION', next_at=0)
+                except Exception:
+                    # A failed remote lookup does not authorize sending the file again.
+                    continue
+            # A normal completion or uncertain failure is verified, never blindly restarted.
+            self.store.set_meta(entry['key'], None)
 
     def _process(self, row):
         """Recheck completion, stable identity, remote collisions and upload receipt."""
@@ -369,29 +423,59 @@ class Engine:
         # Persist intent before crossing the external-write boundary.
         self.store.update(row['id'], state='uploading', attempted=1, message='')
         progress_key = 'upload_progress:' + str(row['id'])
+        attempt = uuid.uuid4().hex
+        can_stop = False
         self.store.set_meta(progress_key, {'sent': 0, 'total': row['size'], 'speed': 0,
-                            'phase': 'preparing', 'updated': time.time()})
+                            'phase': 'preparing', 'updated': time.time(), 'attempt': attempt, 'can_stop': False})
         sent, previous_sent, previous_at = 0, 0, time.monotonic()
         reported = False
+        stop_requested = False
+        last_stop_check = 0
 
         def progress(increment):
-            nonlocal sent, previous_sent, previous_at, reported
-            sent = max(0, min(row['size'], sent + int(increment)))
+            nonlocal sent, previous_sent, previous_at, reported, stop_requested, last_stop_check
             now = time.monotonic()
+            increment = int(increment)
+            if now - last_stop_check >= 0.25 or sent + increment >= row['size']:
+                try:
+                    request = self.store.meta('restart_request:' + str(row['id']), {}) or {}
+                except Exception:
+                    request = {}
+                last_stop_check = now
+                if request.get('attempt') == attempt:
+                    stop_requested = True
+                    raise UploadStopped()
+            sent = max(0, min(row['size'], sent + increment))
             elapsed = now - previous_at
             if reported and elapsed < 1 and sent != row['size']:
                 return
             try:
                 self.store.set_meta(progress_key, {'sent': sent, 'total': row['size'],
                                     'speed': max(0, sent - previous_sent) / max(elapsed, 0.001),
-                                    'phase': 'uploading', 'updated': time.time()})
+                                    'phase': 'uploading', 'updated': time.time(),
+                                    'attempt': attempt, 'can_stop': can_stop})
             except Exception:
                 # Display telemetry must not interrupt an upload already in flight.
                 return
             reported = True
             previous_sent, previous_at = sent, now
 
-        receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name, progress=progress)
+        def set_supported(supported):
+            nonlocal can_stop
+            can_stop = bool(supported)
+            current = self.store.meta(progress_key, {}) or {}
+            current['can_stop'] = can_stop
+            self.store.set_meta(progress_key, current)
+
+        progress.set_supported = set_supported
+
+        try:
+            receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name, progress=progress)
+        except Exception:
+            if stop_requested:
+                # HTTP adapters may wrap the iterator's cancellation exception.
+                raise UploadStopped() from None
+            raise
         if signature(path) != sig:
             raise UploadError('SOURCE_CHANGED_AFTER_UPLOAD', False)
         self.store.update(row['id'], state='verifying', receipt=json.dumps(receipt) if receipt else None,
@@ -418,6 +502,9 @@ class Engine:
     def _fail(self, row, error):
         """Persist bounded retries using safe codes; never log raw SDK errors."""
         current = self.store.rows('SELECT * FROM files WHERE id=?', (row['id'],))[0]
+        if isinstance(error, UploadStopped):
+            self.store.update(row['id'], state='verifying', message='USER_REQUESTED_RESTART', next_at=0)
+            return
         code = error.code if isinstance(error, UploadError) else 'SERVICE_ERROR'
         retryable = not isinstance(error, UploadError) or error.retryable
         retries = current['retries'] + 1

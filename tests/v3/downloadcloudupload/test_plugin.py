@@ -466,6 +466,126 @@ class QueueTest(unittest.TestCase):
         self.advance()
         self.assertEqual(self.files()[0]['state'], 'success')
 
+    def test_active_upload_stops_before_restart_and_new_attempt_reports_progress(self):
+        self.enqueue()
+        file_id = self.files()[0]['id']
+        instance = plugin.DownloadCloudUpload()
+        instance._engine = self.engine
+        instance.test_data_path = self.root
+        original = self.gateway.upload
+        calls = []
+        def upload(folder, path, name, progress=None):
+            calls.append(name)
+            progress.set_supported(True)
+            if len(calls) == 1:
+                progress(2)
+                response = instance.api_action(plugin.ActionRequest(action='restart', ids=[file_id]))
+                self.assertTrue(response.success)
+                self.assertEqual(self.files()[0]['state'], 'uploading')
+                try:
+                    progress(3)
+                except core.UploadStopped:
+                    raise core.UploadError('HTTP_ADAPTER_WRAPPED_STOP')
+                self.fail('SDK continued after stop request')
+            self.assertEqual(self.store.meta('upload_progress:' + str(file_id))['sent'], 0)
+            progress(path.stat().st_size)
+            return original(folder, path, name)
+        self.gateway.upload = upload
+        with self.engine.lock:
+            self.engine.process()  # Stable-file check.
+            self.engine.process()  # Stop acknowledged, then safely requeue.
+        self.assertEqual(self.files()[0]['state'], 'queued')
+        self.assertEqual(self.files()[0]['attempted'], 0)
+        self.assertFalse(self.store.meta('restart_request:' + str(file_id)))
+        self.assertEqual(self.gateway.uploads, [])
+        with self.engine.lock:
+            self.advance()
+        self.assertEqual(self.files()[0]['state'], 'success')
+        self.assertEqual(self.store.meta('upload_progress:' + str(file_id))['sent'], 5)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(self.gateway.uploads), 1)
+
+    def test_stop_request_can_reach_capable_worker_from_previous_instance(self):
+        self.enqueue()
+        file_id = self.files()[0]['id']
+        self.store.update(file_id, state='uploading', attempted=1)
+        self.store.set_meta('upload_progress:' + str(file_id), {'attempt': 'live', 'can_stop': True})
+        instance = plugin.DownloadCloudUpload()
+        instance._engine = self.engine
+        instance.test_data_path = self.root
+        with core.worker_lease(self.root / 'worker.lock') as acquired:
+            self.assertTrue(acquired)
+            response = instance.api_action(plugin.ActionRequest(action='restart', ids=[file_id]))
+        self.assertTrue(response.success)
+        self.assertEqual(self.store.meta('restart_request:' + str(file_id))['attempt'], 'live')
+        self.assertEqual(self.files()[0]['state'], 'uploading')
+        self.assertEqual(self.files()[0]['attempted'], 1)
+
+    def test_remote_presence_or_failed_lookup_never_restarts_cancelled_upload(self):
+        self.enqueue()
+        file_id = self.files()[0]['id']
+        self.store.update(file_id, state='verifying', attempted=1, message='USER_REQUESTED_RESTART')
+        self.store.set_meta('upload_progress:' + str(file_id), {'attempt': 'stop', 'can_stop': True})
+        self.store.set_meta('restart_request:' + str(file_id), {'attempt': 'stop'})
+        with patch.object(self.gateway, 'lookup', side_effect=core.UploadError('REMOTE_QUERY_FAILED')):
+            self.engine.process()
+        self.assertEqual(self.files()[0]['attempted'], 1)
+        self.assertEqual(self.files()[0]['message'], 'USER_REQUESTED_RESTART')
+        self.assertTrue(self.store.meta('restart_request:' + str(file_id)))
+        self.gateway.remote[('115网盘Plus', '/影视/剧/第01集.mkv')] = {'size': 5, 'id': 'existing'}
+        self.engine.resolve_restarts()
+        self.assertEqual(self.files()[0]['state'], 'verifying')
+        self.assertEqual(self.files()[0]['attempted'], 1)
+        self.assertFalse(self.store.meta('restart_request:' + str(file_id)))
+        self.assertEqual(self.gateway.uploads, [])
+
+    def test_old_thread_restart_disabled_and_stop_request_status_visible(self):
+        self.enqueue()
+        file_id = self.files()[0]['id']
+        self.store.update(file_id, state='uploading', attempted=1)
+        def buttons(page):
+            result = []
+            for node in page:
+                if node.get('component') == 'VBtn': result.append(node)
+                result.extend(buttons(node.get('content', [])))
+            return result
+        page = plugin.queue_page(self.store, worker_busy=True)
+        old_button = next(button for button in buttons(page) if button['text'] == '等待旧上传结束')
+        self.assertTrue(old_button['props']['disabled'])
+        self.store.set_meta('upload_progress:' + str(file_id), {'attempt': 'new', 'can_stop': True})
+        page = plugin.queue_page(self.store, worker_busy=True)
+        new_button = next(button for button in buttons(page) if button['text'] == '停止并重新上传')
+        self.assertFalse(new_button['props']['disabled'])
+        self.store.set_meta('restart_request:' + str(file_id), {'attempt': 'new'})
+        page = plugin.queue_page(self.store, worker_busy=True)
+        self.assertIn('正在停止，随后重新上传', json.dumps(page, ensure_ascii=False))
+        self.assertTrue(all(button['props']['disabled'] for button in buttons(page)
+                            if button['text'] != '刷新'))
+
+    def test_stale_stop_request_cannot_cancel_another_attempt(self):
+        self.enqueue()
+        file_id = self.files()[0]['id']
+        self.store.set_meta('restart_request:' + str(file_id), {'attempt': 'obsolete'})
+        self.store.set_meta('upload_progress:' + str(file_id), {'attempt': 'current'})
+        self.engine.resolve_restarts()
+        self.assertFalse(self.store.meta('restart_request:' + str(file_id)))
+        self.assertEqual(self.files()[0]['state'], 'queued')
+
+    def test_completion_racing_stop_request_is_verified_without_second_upload(self):
+        self.enqueue()
+        file_id = self.files()[0]['id']
+        original = self.gateway.upload
+        def upload(folder, path, name, progress=None):
+            progress.set_supported(True)
+            progress(path.stat().st_size)
+            self.assertTrue(self.engine.request_restart(file_id))
+            return original(folder, path, name)
+        self.gateway.upload = upload
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'success')
+        self.assertFalse(self.store.meta('restart_request:' + str(file_id)))
+        self.assertEqual(len(self.gateway.uploads), 1)
+
 
 class DirectCloudTest(unittest.TestCase):
     def setUp(self):
@@ -523,6 +643,25 @@ class DirectCloudTest(unittest.TestCase):
             increments = []
             self.cloud.upload(folder, path, path.name, progress=increments.append)
             self.assertEqual(increments, [5])
+
+    def test_sdk_stop_capability_and_cancellation_are_preserved(self):
+        def supported(*, reporthook=None, **kwargs):
+            reporthook(1)
+            self.fail('Upload continued after cancellation')
+        def progress(increment):
+            raise core.UploadStopped()
+        capabilities = []
+        progress.set_supported = capabilities.append
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'video.mkv'
+            path.write_bytes(b'video')
+            folder = {'client': SimpleNamespace(upload_file=supported), 'id': '10', 'account': 'account'}
+            with self.assertRaises(core.UploadStopped):
+                self.cloud.upload(folder, path, path.name, progress=progress)
+            self.assertEqual(capabilities, [True])
+            folder['client'] = self.client
+            self.cloud.upload(folder, path, path.name, progress=progress)
+            self.assertEqual(capabilities, [True, False])
 
     def test_cookie_read_uses_documented_field_and_does_not_write(self):
         config = {'cookies': 'UID=123_A1_token; CID=private; SEID=secret', 'enabled': False}

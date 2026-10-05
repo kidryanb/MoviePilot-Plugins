@@ -4,7 +4,7 @@ from http.cookies import SimpleCookie
 from pathlib import PurePosixPath
 from collections import Counter
 
-from .core import UploadError
+from .core import UploadError, UploadStopped
 
 
 def strm_cookie():
@@ -179,6 +179,9 @@ class Cloud115:
                     options['make_reporthook'] = lambda total: progress
                 elif 'reporthook' in parameters:
                     options['reporthook'] = progress
+                notify = getattr(progress, 'set_supported', None)
+                if callable(notify):
+                    notify(bool(options))
             result = checked(folder['client'].upload_file(file=str(path), pid=folder['id'],
                              filename=name, filesize=path.stat().st_size, partsize=-1, timeout=300, **options))
             data = result.get('data') or result
@@ -187,5 +190,7 @@ class Cloud115:
             if not identifier:
                 raise UploadError('UPLOAD_RESULT_UNKNOWN')
             return {'id': folder['account'] + ':' + str(identifier), 'size': path.stat().st_size}
+        except UploadStopped:
+            raise
         except Exception:
             raise UploadError('UPLOAD_RESULT_UNKNOWN') from None
