@@ -106,7 +106,7 @@ class FakeGateway:
     def folder(self, storage, target, root):
         return storage, target
 
-    def upload(self, folder, path, name):
+    def upload(self, folder, path, name, progress=None):
         storage, parent = folder
         self.uploads.append((folder, name))
         if self.upload_error:
@@ -339,6 +339,59 @@ class QueueTest(unittest.TestCase):
         with core.worker_lease(self.root / 'worker.lock') as recovered:
             self.assertTrue(recovered)
 
+    def test_upload_progress_persists_bytes_without_marking_success(self):
+        self.enqueue()
+        original = self.gateway.upload
+        def upload(folder, path, name, progress=None):
+            progress(2)
+            progress(path.stat().st_size - 2)
+            return original(folder, path, name)
+        self.gateway.upload = upload
+        self.engine.process()
+        self.engine.process()
+        row = self.files()[0]
+        self.assertEqual(row['state'], 'verifying')
+        self.assertEqual(self.store.meta('upload_progress:' + str(row['id']))['sent'], row['size'])
+
+    def test_dashboard_hides_old_successful_and_internal_details(self):
+        self.add(hash_string='old', name='old.mkv')
+        self.engine.scan()
+        _, _ = self.add(hash_string='new', name='new.mkv')
+        self.engine.scan()
+        row = self.files()[0]
+        self.store.update(row['id'], state='uploading', message='SECRET_INTERNAL_CODE')
+        self.store.set_meta('upload_progress:' + str(row['id']),
+                            {'sent': 2, 'total': row['size'], 'speed': 1024, 'updated': core.time.time()})
+        page = plugin.queue_page(self.store)
+        serialized = json.dumps(page, ensure_ascii=False)
+        self.assertIn('上传中 1', serialized)
+        self.assertIn('40.0%', serialized)
+        self.assertNotIn('启用前已完成', serialized)
+        self.assertNotIn('SECRET_INTERNAL_CODE', serialized)
+        self.assertNotIn('/影视', serialized)
+        self.assertNotIn(str(self.local), serialized)
+        self.store.update(row['id'], state='success')
+        self.assertIn('暂无待上传任务', json.dumps(plugin.queue_page(self.store), ensure_ascii=False))
+
+    def test_dashboard_pending_download_and_unknown_progress_are_honest(self):
+        self.engine.scan()
+        task, _ = self.add(complete=False)
+        self.engine.scan()
+        self.assertIn('待上传 1', json.dumps(plugin.queue_page(self.store), ensure_ascii=False))
+        self.gateway.snapshots['qb'] = [core.Torrent('qb', task.hash, task.title, task.save_path, True, 1000)]
+        self.gateway.members[('qb', task.hash)] = [core.TorrentFile('剧/第01集.mkv', 5, True, True)]
+        self.engine.scan()
+        row = self.files()[0]
+        self.store.update(row['id'], state='uploading')
+        serialized = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        self.assertIn('"indeterminate": true', serialized)
+        self.assertNotIn('0.0%', serialized)
+        self.store.update(row['id'], state='failed', message='INTERNAL_ERROR')
+        serialized = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        self.assertIn('需处理', serialized)
+        self.assertIn('上传失败', serialized)
+        self.assertNotIn('INTERNAL_ERROR', serialized)
+
 
 class DirectCloudTest(unittest.TestCase):
     def setUp(self):
@@ -363,6 +416,39 @@ class DirectCloudTest(unittest.TestCase):
         self.client = SimpleNamespace(fs_files=listing, fs_mkdir=mkdir, upload_file=upload)
         self.cloud = cloud_module.Cloud115()
         self.cloud.client = lambda: (self.client, 'account')
+
+    def test_sdk_progress_callback_is_only_passed_when_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'video.mkv'
+            path.write_bytes(b'video')
+            increments = []
+            def supported(*, reporthook=None, **kwargs):
+                reporthook(2)
+                reporthook(3)
+                return {'state': True, 'data': {'fid': '90'}}
+            folder = {'client': SimpleNamespace(upload_file=supported), 'id': '10', 'account': 'account'}
+            receipt = self.cloud.upload(folder, path, path.name, progress=increments.append)
+            self.assertEqual(increments, [2, 3])
+            self.assertEqual(receipt['size'], 5)
+            folder['client'] = self.client
+            self.cloud.upload(folder, path, path.name, progress=increments.append)
+            self.assertNotIn('reporthook', self.uploaded[-1])
+            self.assertNotIn('make_reporthook', self.uploaded[-1])
+
+    def test_p115oss_delegate_receives_incremental_progress(self):
+        def backend(*, reporthook=None, **kwargs):
+            reporthook(kwargs['filesize'])
+            return {'state': True, 'data': {'fid': '90'}}
+        backend.__module__ = 'p115oss'
+        namespace = {'upload_file': backend}
+        exec('def wrapper(**kwargs):\n    return upload_file(**kwargs)', namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'video.mkv'
+            path.write_bytes(b'video')
+            folder = {'client': SimpleNamespace(upload_file=namespace['wrapper']), 'id': '10', 'account': 'account'}
+            increments = []
+            self.cloud.upload(folder, path, path.name, progress=increments.append)
+            self.assertEqual(increments, [5])
 
     def test_cookie_read_uses_documented_field_and_does_not_write(self):
         config = {'cookies': 'UID=123_A1_token; CID=private; SEID=secret', 'enabled': False}

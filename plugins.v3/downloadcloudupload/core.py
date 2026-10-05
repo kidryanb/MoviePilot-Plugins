@@ -368,7 +368,23 @@ class Engine:
         folder = self.gateway.folder(mapping['storage'], str(PurePosixPath(mapping['target']).parent), mapping['target_root'])
         # Persist intent before crossing the external-write boundary.
         self.store.update(row['id'], state='uploading', attempted=1, message='')
-        receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name)
+        progress_key = 'upload_progress:' + str(row['id'])
+        self.store.set_meta(progress_key, {})
+        sent, previous_sent, previous_at = 0, 0, time.monotonic()
+
+        def progress(increment):
+            nonlocal sent, previous_sent, previous_at
+            sent = max(0, min(row['size'], sent + int(increment)))
+            now = time.monotonic()
+            elapsed = now - previous_at
+            if elapsed < 1 and sent != row['size']:
+                return
+            self.store.set_meta(progress_key, {'sent': sent, 'total': row['size'],
+                                'speed': max(0, sent - previous_sent) / max(elapsed, 0.001),
+                                'updated': time.time()})
+            previous_sent, previous_at = sent, now
+
+        receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name, progress=progress)
         if signature(path) != sig:
             raise UploadError('SOURCE_CHANGED_AFTER_UPLOAD', False)
         self.store.update(row['id'], state='verifying', receipt=json.dumps(receipt) if receipt else None,

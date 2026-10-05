@@ -155,11 +155,32 @@ class Cloud115:
             raise UploadError('TARGET_FOLDER_UNAVAILABLE') from None
 
     @staticmethod
-    def upload(folder, path, name):
+    def upload(folder, path, name, progress=None):
         """Only a provider receipt authorizes successful queue reconciliation."""
         try:
+            from inspect import signature
+            options = {}
+            # Only named SDK parameters are safe; **kwargs may reach HTTP requests.
+            try:
+                parameters = signature(folder['client'].upload_file).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if any(parameter.kind == parameter.VAR_KEYWORD for parameter in parameters.values()):
+                method = folder['client'].upload_file
+                function = getattr(method, '__func__', method)
+                delegate = getattr(function, '__globals__', {}).get('upload_file')
+                if getattr(delegate, '__module__', '').startswith('p115oss'):
+                    try:
+                        parameters = signature(delegate).parameters
+                    except (TypeError, ValueError):
+                        pass
+            if progress is not None:
+                if 'make_reporthook' in parameters:
+                    options['make_reporthook'] = lambda total: progress
+                elif 'reporthook' in parameters:
+                    options['reporthook'] = progress
             result = checked(folder['client'].upload_file(file=str(path), pid=folder['id'],
-                             filename=name, filesize=path.stat().st_size, partsize=-1, timeout=300))
+                             filename=name, filesize=path.stat().st_size, partsize=-1, timeout=300, **options))
             data = result.get('data') or result
             identifier = (data.get('file_id') or data.get('fid') or data.get('pick_code')
                           or data.get('pickcode') or result.get('pickcode'))

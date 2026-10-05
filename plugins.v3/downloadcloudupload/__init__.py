@@ -22,6 +22,7 @@ from .gateway import MPGateway
 from .cloud115 import Cloud115, strm_cookie
 from .picker import local_folders, folder_picker
 from .organizer import Organizer
+from .dashboard import queue_page
 
 
 class FolderRequest(BaseModel):
@@ -97,7 +98,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.3.0'
+    plugin_version = '0.3.1'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -448,41 +449,13 @@ class DownloadCloudUpload(_PluginBase):
         ]}], defaults
 
     def get_page(self):
-        """Present queue receipts using text nodes, not untrusted HTML."""
-        base = f'plugin/{self.__class__.__name__}'
-        page = [{'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal',
-                 'text': '直接上传到115，自动复用115 STRM助手已保存的 Cookie。'}}]
+        """Show upload progress and pending work, with actionable failures kept visible."""
+        page = []
         if self._error:
             page.append({'component': 'VAlert', 'props': {'type': 'error', 'text': self._error}})
-        if self._strm_path:
-            page.append({'component': 'VAlert', 'props': {'type': 'info',
-                         'text': f'MP 自动整理已接管，STRM 监控目录：{self._strm_path}'}})
         if not self._engine:
+            if not self._error:
+                page.append({'component': 'div', 'props': {'class': 'text-center pa-6'}, 'text': '请先配置并启用插件'})
             return page
-        page.extend([
-            {'component': 'VBtn', 'props': {'class': 'ma-1'}, 'text': '立即检查',
-             'events': {'click': {'api': base + '/check', 'method': 'POST'}}},
-            {'component': 'VBtn', 'props': {'class': 'ma-1', 'variant': 'outlined'}, 'text': '预览补传',
-             'events': {'click': {'api': base + '/preview', 'method': 'POST'}}},
-        ])
-        for instance in self._engine.instances:
-            state = self._engine.store.meta('connection:' + instance, {})
-            page.append({'component': 'VAlert', 'props': {'type': 'success' if state.get('ok') else 'warning',
-                         'text': f"{instance}：{'检查成功' if state.get('ok') else state.get('code', '尚未检查')}"}})
-        counts = self._engine.store.rows('SELECT state,count(*) AS count FROM files GROUP BY state')
-        page.append({'component': 'div', 'props': {'class': 'my-3'},
-                     'text': ' · '.join(f"{LABELS.get(row['state'], row['state'])} {row['count']}" for row in counts) or '暂无上传任务'})
-        tasks = self._engine.store.rows('SELECT * FROM torrents ORDER BY updated DESC LIMIT 100')
-        for task in tasks:
-            rows = self._engine.store.rows('SELECT * FROM files WHERE task_key=? ORDER BY id', (task['key'],))
-            content = [{'component': 'VCardTitle', 'text': f"{task['instance']} · {task['title']}"},
-                       {'component': 'VCardSubtitle', 'text': LABELS.get(task['state'], task['state']) if not rows else f'文件数：{len(rows)}'}]
-            for row in rows:
-                mapping = json.loads(row['mapping'])
-                content.append({'component': 'VCardText', 'content': [
-                    {'component': 'div', 'text': f"#{row['id']} {row['name']} · {LABELS.get(row['state'], row['state'])}"},
-                    {'component': 'div', 'text': f"{mapping['storage']}：{mapping['target']}"},
-                    {'component': 'div', 'text': f"{row['message']} · 重试次数 {row['retries']}" if row['message'] else ''},
-                ]})
-            page.append({'component': 'VCard', 'props': {'class': 'my-3', 'variant': 'outlined'}, 'content': content})
+        page.extend(queue_page(self._engine.store))
         return page
