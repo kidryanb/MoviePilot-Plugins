@@ -620,6 +620,80 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(self.store.meta(key)['phase'], 'submitted')
         self.assertEqual(self.files()[0]['state'], 'verifying')
 
+    def test_idle_rows_can_be_handled_while_old_thread_uploads(self):
+        self.engine.scan()
+        self.add(hash_string='big', name='盗梦空间.mkv')
+        self.add(hash_string='other', name='别的.mkv')
+        self.engine.scan()
+        big, other = self.files()
+        self.store.update(big['id'], state='uploading', attempted=1)
+        self.store.set_meta('upload_progress:' + str(big['id']), {'sent': 2, 'total': 5})
+        self.store.update(other['id'], state='failed', message='SOURCE_MISSING')
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        with core.worker_lease(self.root / 'worker.lock') as acquired:  # reloaded old instance
+            self.assertTrue(acquired)
+            result = instance.api_action(plugin.ActionRequest(action='ignore', ids=[other['id']]))
+            self.assertTrue(result.success, result.message)
+            self.assertIn('盗梦空间.mkv（40%）', result.message)
+            refused = instance.api_action(plugin.ActionRequest(action='ignore', ids=[big['id']]))
+            self.assertFalse(refused.success)
+            self.assertIn('停止并重新上传', refused.message)
+        states = {row['name']: row['state'] for row in self.files()}
+        self.assertEqual(states, {'盗梦空间.mkv': 'uploading', '别的.mkv': 'ignored'})
+        self.assertEqual(self.gateway.uploads, [])
+
+    def test_retry_while_own_worker_busy_is_applied(self):
+        _, path = self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='failed', message='SOURCE_MISSING')
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        with self.engine.lock:
+            result = instance.api_action(plugin.ActionRequest(action='retry', ids=[row['id']]))
+        self.assertTrue(result.success, result.message)
+        self.assertEqual(self.files()[0]['state'], 'queued')
+
+    def test_verifying_restart_while_other_worker_busy_requeues_without_upload(self):
+        self.enqueue()
+        row = self.files()[0]
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        for old_worker in (False, True):
+            with self.subTest(old_worker=old_worker):
+                self.store.update(row['id'], state='verifying', attempted=1, receipt='{}')
+                self.store.set_meta('upload_progress:' + str(row['id']), {'sent': 0, 'can_stop': False})
+                lock = core.worker_lease(self.root / 'worker.lock') if old_worker else self.engine.lock
+                with lock:
+                    result = instance.api_action(plugin.ActionRequest(action='restart', ids=[row['id']]))
+                self.assertTrue(result.success, result.message)
+                fresh = self.files()[0]
+                self.assertEqual(fresh['state'], 'queued')
+                self.assertEqual(fresh['attempted'], 0)
+                self.assertIsNone(fresh['receipt'])
+                self.assertEqual(self.gateway.uploads, [])
+
+    def test_busy_restart_of_verifying_file_requires_confirmed_remote_absence(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='verifying', attempted=1)
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        for remote in ({'size': row['size']}, None):
+            with self.subTest(remote=remote):
+                with patch.object(self.gateway, 'lookup', return_value=remote,
+                                  side_effect=RuntimeError('offline') if remote is None else None):
+                    with self.engine.lock:
+                        result = instance.api_action(plugin.ActionRequest(action='restart', ids=[row['id']]))
+                self.assertFalse(result.success)
+                self.assertEqual(self.files()[0]['state'], 'verifying')
+                self.assertEqual(self.files()[0]['attempted'], 1)
+                self.assertEqual(self.gateway.uploads, [])
+
     def test_restart_does_not_override_old_worker_or_report_empty_success(self):
         self.enqueue()
         row = self.files()[0]

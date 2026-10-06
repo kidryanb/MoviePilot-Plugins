@@ -99,7 +99,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.3.7'
+    plugin_version = '0.3.8'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -300,15 +300,11 @@ class DownloadCloudUpload(_PluginBase):
             if verified is not None:
                 return verified
         if not self._engine.lock.acquire(blocking=False):
-            if payload.action == 'restart':
-                return self._request_active_restart(payload)
-            return Response(success=False, message='上传正在执行，请稍后再试')
+            return self._action_while_busy(payload)
         try:
             with worker_lease(self.get_data_path() / 'worker.lock') as acquired:
                 if not acquired:
-                    if payload.action == 'restart':
-                        return self._request_active_restart(payload)
-                    return Response(success=False, message='旧上传线程仍在运行，本次操作未执行。重置插件不会中止上传，请等当前上传结束。')
+                    return self._action_while_busy(payload)
                 count = self._engine.action(payload.ids, payload.action, allow_stale_upload=True)
                 if not count:
                     message = ('未重新上传：任务已完成、远端已有文件或任务已失效，请先核对并刷新。'
@@ -321,6 +317,42 @@ class DownloadCloudUpload(_PluginBase):
             return Response(success=False, message='操作未完成，请检查115连接后刷新任务状态。')
         finally:
             self._engine.lock.release()
+
+    def _busy_note(self):
+        """Name the file the other thread is sending, so the wait is understandable."""
+        rows = self._engine.store.rows("SELECT id,name,size FROM files WHERE state='uploading' ORDER BY updated DESC LIMIT 1")
+        if not rows:
+            return '另一个上传线程仍在运行'
+        row = rows[0]
+        name = row['name'].replace('\\', '/').rsplit('/', 1)[-1]
+        progress = self._engine.store.meta('upload_progress:' + str(row['id']), {}) or {}
+        note = f'正在上传 {name}'
+        if row['size'] and 'sent' in progress:
+            note += f'（{min(100, progress["sent"] * 100 / row["size"]):.0f}%）'
+        return note
+
+    def _action_while_busy(self, payload):
+        """Only the row being uploaded needs the upload lease; other rows are just queue state.
+
+        The upload thread re-reads each row before touching it, and a stopped (reloaded) old
+        instance exits after its current file, so editing idle rows cannot cause a second write.
+        """
+        uploading = [file_id for file_id in payload.ids if self._engine.store.rows(
+            "SELECT id FROM files WHERE id=? AND state='uploading'", (file_id,))]
+        if uploading:
+            if payload.action == 'restart':
+                return self._request_active_restart(payload)
+            return Response(success=False, message=f'{self._busy_note()}，该文件上传结束前只能“停止并重新上传”。')
+        try:
+            count = self._engine.action(payload.ids, payload.action, allow_stale_upload=False)
+        except Exception:
+            return Response(success=False, message='操作未完成，请检查115连接后刷新任务状态。')
+        if not count:
+            message = ('未重新上传：任务已完成或115上已有文件，请先核对并刷新。'
+                       if payload.action == 'restart' else '任务状态不允许此操作，或没有可处理的文件，请刷新。')
+            return Response(success=False, message=message, data=ActionResult(accepted=False, count=0))
+        return Response(success=True, message=f'已处理 {count} 个文件；{self._busy_note()}，结束后自动接着处理。',
+                        data=ActionResult(accepted=True, count=count))
 
     def _verify_now(self, payload):
         """Check uploaded rows against 115 immediately; read-only on 115, so no upload lock."""
