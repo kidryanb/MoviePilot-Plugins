@@ -13,6 +13,10 @@ ATTENTION = {'failed', 'conflict'}
 STATUS = {'uploading': '上传中', 'verifying': '确认上传结果', 'queued': '等待上传',
           'waiting_complete': '等待下载完成', 'waiting_source': '等待本地文件',
           'retry_wait': '等待重试', 'failed': '上传失败', 'conflict': '文件冲突'}
+REASONS = {'REMOTE_FILE_NOT_FOUND': '115 上始终没有该文件，可点“重新上传”',
+           'REMOTE_SIZE_CONFLICT': '115 已有同名文件但大小不同',
+           'REMOTE_CONTENT_UNCONFIRMED': '115 已有同名文件，内容无法确认',
+           'SOURCE_MISSING': '本地文件不存在'}
 
 
 def action_button(plugin_id, file_id, action, title, disabled=False, confirmed=False):
@@ -62,6 +66,8 @@ def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
                                 'text': PurePosixPath(row['name'].replace('\\', '/')).name})
             state = row['state']
             text = STATUS[state]
+            if row.get('message') in REASONS:
+                text += ' · ' + REASONS[row['message']]
             progress = store.meta('upload_progress:' + str(row['id']), {}) or {}
             request = store.meta('restart_request:' + str(row['id']), {}) or {}
             stopping = bool(request and request.get('attempt') == progress.get('attempt'))

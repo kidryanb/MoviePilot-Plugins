@@ -207,6 +207,11 @@ class DownloadCloudUpload(_PluginBase):
             return
         try:
             self._engine.scan()
+            try:
+                # Runs every poll even while the upload thread is busy with a long file.
+                self._engine.verify_pending()
+            except Exception:
+                logger.warning('下载完成自动上传：远端核对失败，下轮重试')
             if not self._worker or not self._worker.is_alive():
                 self._worker = threading.Thread(target=self._upload_loop, name=f'{self.__class__.__name__}-Upload', daemon=True)
                 self._worker.start()
@@ -290,6 +295,10 @@ class DownloadCloudUpload(_PluginBase):
         """Serialize user changes with the uploading worker."""
         if not self._engine:
             return Response(success=False, message='请先配置并启用插件')
+        if payload.action == 'verify':
+            verified = self._verify_now(payload)
+            if verified is not None:
+                return verified
         if not self._engine.lock.acquire(blocking=False):
             if payload.action == 'restart':
                 return self._request_active_restart(payload)
@@ -312,6 +321,22 @@ class DownloadCloudUpload(_PluginBase):
             return Response(success=False, message='操作未完成，请检查115连接后刷新任务状态。')
         finally:
             self._engine.lock.release()
+
+    def _verify_now(self, payload):
+        """Check uploaded rows against 115 immediately; read-only on 115, so no upload lock."""
+        ids = [file_id for file_id in payload.ids if self._engine.store.rows(
+            "SELECT id FROM files WHERE id=? AND state='verifying' AND attempted=1", (file_id,))]
+        if not ids:
+            return None  # not an uploaded row: fall back to the normal queued re-check
+        try:
+            settled = self._engine.verify_pending(ids)
+        except Exception:
+            return Response(success=False, message='核对未完成，请检查115连接后刷新。')
+        if settled:
+            return Response(success=True, message=f'已核对 {settled} 个文件',
+                            data=ActionResult(accepted=True, count=settled))
+        return Response(success=False, message='115 暂未找到该文件，稍后会自动再核对；多次仍找不到会转为可重新上传。',
+                        data=ActionResult(accepted=False, count=0))
 
     def _request_active_restart(self, payload):
         """Request cooperative cancellation even when another plugin instance owns the lease."""

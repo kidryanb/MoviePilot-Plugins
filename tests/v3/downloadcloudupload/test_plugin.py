@@ -90,6 +90,8 @@ class FakeGateway:
         self.uploads = []
         self.query_error = False
         self.upload_error = False
+        self.lag = False  # simulate 115 listing a fresh upload one lookup late
+        self.lagging = set()
 
     def tasks(self, instance):
         if self.query_error:
@@ -103,6 +105,9 @@ class FakeGateway:
         return any(t.hash == hash_string and t.complete for t in self.snapshots[instance])
 
     def lookup(self, storage, target):
+        if (storage, target) in self.lagging:
+            self.lagging.discard((storage, target))
+            return None
         return self.remote.get((storage, target))
 
     def folder(self, storage, target, root):
@@ -116,6 +121,8 @@ class FakeGateway:
         size = path.stat().st_size
         receipt = {'id': f'file-{len(self.uploads)}', 'size': size}
         self.remote[(storage, parent + '/' + name)] = {**receipt, 'confirmed': True}
+        if self.lag:
+            self.lagging.add((storage, parent + '/' + name))
         return receipt
 
 
@@ -268,6 +275,7 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(self.gateway.uploads, [])
 
     def test_recover_uploaded_receipt_after_worker_crash(self):
+        self.gateway.lag = True
         self.enqueue()
         self.engine.process()
         self.engine.process()
@@ -353,6 +361,7 @@ class QueueTest(unittest.TestCase):
         self.assertEqual([row['name'] for row in self.files()], ['好.mkv'])
 
     def test_uploaded_then_torrent_and_files_deleted_still_verifies(self):
+        self.gateway.lag = True
         _, path = self.enqueue()
         self.engine.process()
         self.engine.process()  # upload -> verifying
@@ -411,6 +420,71 @@ class QueueTest(unittest.TestCase):
         self.advance()
         self.assertEqual(self.files()[0]['state'], 'already_exists')
 
+    def test_finished_episode_is_confirmed_before_rest_of_season_uploads(self):
+        self.engine.scan()
+        task, _ = self.add(name='剧/E01.mkv')
+        path2 = self.local / '剧' / 'E02.mkv'
+        path2.write_bytes(b'video2')
+        self.gateway.members[('qb', 'hash')].append(core.TorrentFile('剧/E02.mkv', 6, True, True))
+        self.engine.scan()
+        self.engine.process(budget=100)  # stabilise signatures
+        original = self.gateway.upload
+        states = []
+        def upload(folder, path, name, progress=None):
+            states.append({row['name']: row['state'] for row in self.files()})
+            return original(folder, path, name, progress)
+        self.gateway.upload = upload
+        self.engine.process(budget=100)
+        # While E02 was uploading, E01 was already confirmed rather than waiting for the batch.
+        self.assertEqual(states[1]['剧/E01.mkv'], 'success')
+        self.assertEqual({row['state'] for row in self.files()}, {'success'})
+
+    def test_poller_verifies_while_upload_thread_is_busy(self):
+        self.gateway.lag = True
+        self.enqueue()
+        self.engine.process()
+        self.engine.process()
+        self.assertEqual(self.files()[0]['state'], 'verifying')
+        with self.engine.lock:  # upload thread busy with another long file
+            self.assertEqual(self.engine.verify_pending(), 1)
+        self.assertEqual(self.files()[0]['state'], 'success')
+
+    def test_manual_verify_button_works_during_upload(self):
+        self.gateway.lag = True
+        self.enqueue()
+        self.engine.process()
+        self.engine.process()
+        row = self.files()[0]
+        with self.store.connect() as db:
+            db.execute('UPDATE files SET next_at=? WHERE id=?', (time.time() + 999, row['id']))
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        with self.engine.lock:
+            result = instance.api_action(plugin.ActionRequest(action='verify', ids=[row['id']]))
+        self.assertTrue(result.success)
+        self.assertEqual(self.files()[0]['state'], 'success')
+
+    def test_receipt_backed_upload_tolerates_listing_lag(self):
+        self.enqueue()
+        self.engine.process()
+        row = self.files()[0]
+        self.store.update(row['id'], state='verifying', attempted=1, retries=0,
+                          receipt=json.dumps({'id': 'r', 'size': 5}))
+        for _ in range(6):
+            with self.store.connect() as db:
+                db.execute('UPDATE files SET next_at=0')
+            self.engine.verify_pending()
+        self.assertEqual(self.files()[0]['state'], 'verifying')
+        page = json.dumps(plugin.queue_page(self.store), ensure_ascii=False)
+        self.assertIn('等待115核对', page)
+
+    def test_not_found_reason_is_shown(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='failed', message='REMOTE_FILE_NOT_FOUND', attempted=1)
+        self.assertIn('可点“重新上传”', json.dumps(plugin.queue_page(self.store), ensure_ascii=False))
+
     def test_windows_downloader_to_host_path(self):
         rule = {**self.rules[0], 'source': 'D:\\Downloads'}
         result = core.map_file('qb', 'D:\\Downloads\\剧\\第01集.mkv', [rule])
@@ -461,6 +535,7 @@ class QueueTest(unittest.TestCase):
             self.assertTrue(recovered)
 
     def test_upload_progress_persists_bytes_without_marking_success(self):
+        self.gateway.lag = True
         self.enqueue()
         original = self.gateway.upload
         def upload(folder, path, name, progress=None):
@@ -514,6 +589,7 @@ class QueueTest(unittest.TestCase):
         self.assertNotIn('INTERNAL_ERROR', serialized)
 
     def test_restart_clears_old_progress_and_new_upload_reports_bytes(self):
+        self.gateway.lag = True
         self.enqueue()
         row = self.files()[0]
         self.store.update(row['id'], state='uploading', attempted=1)
@@ -760,6 +836,7 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(len(self.gateway.uploads), 1)
 
     def test_verification_displays_submission_progress_without_claiming_success(self):
+        self.gateway.lag = True
         self.enqueue()
         self.engine.process()
         self.engine.process()

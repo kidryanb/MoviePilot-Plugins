@@ -441,11 +441,40 @@ class Engine:
                 break
             if self.store.meta('restart_request:' + str(row['id'])):
                 continue
+            # The snapshot can be an hour old after a long upload; the poller may have settled it.
+            current = self.store.rows('SELECT state,next_at FROM files WHERE id=?', (row['id'],))
+            if not current or current[0]['state'] != row['state'] or current[0]['next_at'] > time.time():
+                continue
             try:
                 uploads += int(self._process(row))
             except Exception as error:
                 self._fail(row, error)
         self.resolve_restarts()
+
+    def verify_pending(self, ids=None, limit=50):
+        """Settle '待核对' rows from 115 only, independent of the (possibly busy) upload thread.
+
+        Never writes to 115, so it is safe to run from the poller while an upload is in flight.
+        """
+        if ids:
+            rows = [row for file_id in dict.fromkeys(ids) for row in self.store.rows(
+                "SELECT * FROM files WHERE id=? AND state='verifying' AND attempted=1", (int(file_id),))]
+        else:
+            rows = self.store.rows("""SELECT * FROM files WHERE state='verifying' AND attempted=1
+                AND next_at<=? ORDER BY id LIMIT ?""", (time.time(), limit))
+        settled = 0
+        for row in rows:
+            if self.stopped():
+                break
+            if self.store.meta('restart_request:' + str(row['id'])) or row['message'] == 'USER_REQUESTED_RESTART':
+                continue  # resolve_restarts owns these
+            try:
+                self._verify(row, json.loads(row['mapping']))
+            except Exception as error:
+                self._fail(row, error)
+            state = self.store.rows('SELECT state FROM files WHERE id=?', (row['id'],))
+            settled += int(bool(state) and state[0]['state'] != 'verifying')
+        return settled
 
     def request_restart(self, file_id):
         """Publish a stop request for the exact capable upload attempt, without its lock."""
@@ -634,14 +663,28 @@ class Engine:
             except Exception:
                 # The durable receipt above still proves submission if telemetry fails.
                 pass
+            # Confirm right away instead of after the rest of the queue has uploaded.
+            try:
+                fresh = self.store.rows('SELECT * FROM files WHERE id=?', (row['id'],))[0]
+                self._verify(fresh, mapping, count_miss=False)
+            except Exception:
+                pass  # the poller retries; a lookup error must not fail a submitted upload
         return True
 
-    def _verify(self, row, mapping):
+    def _verify(self, row, mapping, count_miss=True):
         """Settle an attempted upload from 115 alone; bounded so it cannot wait forever."""
         remote = self.gateway.lookup(mapping['storage'], mapping['target'])
         if remote is None:
+            if not count_miss:
+                return False  # 115 listings can lag a few seconds behind the upload callback
             retries = row['retries'] + 1
-            if retries > max(self.retry_limit, 3):
+            try:
+                receipt = json.loads(row['receipt']) if row['receipt'] else None
+            except (TypeError, ValueError):
+                receipt = None
+            # A provider receipt means the file was accepted: allow ~15 min of listing lag.
+            allowance = max(self.retry_limit, 3) + (10 if isinstance(receipt, dict) and receipt.get('id') else 0)
+            if retries > allowance:
                 # Nothing landed on 115: surface it so the user can choose "重新上传".
                 self.store.update(row['id'], state='failed', message='REMOTE_FILE_NOT_FOUND', retries=retries)
             else:
