@@ -99,7 +99,7 @@ class DownloadCloudUpload(_PluginBase):
     plugin_name = '下载完成自动上传'
     plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.3.8'
+    plugin_version = '0.3.9'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -112,6 +112,7 @@ class DownloadCloudUpload(_PluginBase):
         self._enabled = False
         self._stop = threading.Event()
         self._monitor_lock = threading.Lock()
+        self._worker_lock = threading.Lock()
         self._worker = None
         self._engine = None
         self._error = ''
@@ -212,16 +213,35 @@ class DownloadCloudUpload(_PluginBase):
                 self._engine.verify_pending()
             except Exception:
                 logger.warning('下载完成自动上传：远端核对失败，下轮重试')
-            if not self._worker or not self._worker.is_alive():
-                self._worker = threading.Thread(target=self._upload_loop, name=f'{self.__class__.__name__}-Upload', daemon=True)
-                self._worker.start()
+            self._start_upload_worker()
         finally:
             self._monitor_lock.release()
+
+    def _start_upload_worker(self):
+        """Start one queue worker without waiting for downloader discovery."""
+        with self._worker_lock:
+            if not self._enabled or self._stop.is_set() or not self._engine:
+                return False
+            if self._worker and self._worker.is_alive():
+                return False
+            self._worker = threading.Thread(target=self._upload_loop, name=f'{self.__class__.__name__}-Upload', daemon=True)
+            self._worker.start()
+            return True
+
+    def _wake_queue(self):
+        """Keep a manual retry alive until the current worker releases its lease."""
+        if not self._enabled or self._stop.is_set() or not self._engine:
+            return
+        if not self._start_upload_worker():
+            self._schedule('queue_wake', self._wake_queue, delay=5)
 
     def _upload_loop(self):
         """Drain ready files, then leave delayed work to the next polling cycle."""
         if not self._engine.lock.acquire(blocking=False):
+            if self._enabled and not self._stop.is_set():
+                self._schedule('queue_wake', self._wake_queue, delay=5)
             return
+        acquired = False
         try:
             with worker_lease(self.get_data_path() / 'worker.lock') as acquired:
                 if not acquired:
@@ -233,12 +253,20 @@ class DownloadCloudUpload(_PluginBase):
             logger.warning('下载完成自动上传：上传队列运行失败')
         finally:
             self._engine.lock.release()
+            if self._enabled and not self._stop.is_set():
+                pending = self._engine.store.rows("""SELECT MIN(next_at) AS due FROM files
+                    WHERE state IN ('queued','waiting_source','waiting_complete','retry_wait','verifying')""")
+                if pending and pending[0]['due'] is not None:
+                    delay = max(1, min(3600, int(pending[0]['due'] - time.time()) + 1))
+                    if not acquired:
+                        delay = max(5, delay)
+                    self._schedule('queue_wake', self._wake_queue, delay=delay)
 
     def stop_service(self):
         """Stop new work; an in-flight SDK upload is allowed to return normally."""
         self._enabled = False
         self._stop.set()
-        for job_id in ['initial', 'check_once', 'preview_once', 'backfill_once', 'retry_once', 'manual']:
+        for job_id in ['initial', 'check_once', 'preview_once', 'backfill_once', 'retry_once', 'manual', 'queue_wake']:
             scheduler_sdk.remove_plugin_once_job(self.__class__.__name__, job_id)
         if self._worker and self._worker.is_alive():
             self._worker.join(timeout=2)
@@ -295,6 +323,8 @@ class DownloadCloudUpload(_PluginBase):
         """Serialize user changes with the uploading worker."""
         if not self._engine:
             return Response(success=False, message='请先配置并启用插件')
+        if self._stop.is_set() or (self._config and not self._enabled):
+            return Response(success=False, message=self._error or '插件已停用，请启用并保存设置后重试。')
         if payload.action == 'verify':
             verified = self._verify_now(payload)
             if verified is not None:
@@ -310,7 +340,7 @@ class DownloadCloudUpload(_PluginBase):
                     message = ('未重新上传：任务已完成、远端已有文件或任务已失效，请先核对并刷新。'
                                if payload.action == 'restart' else '任务状态不允许此操作，或没有可处理的文件，请刷新。')
                     return Response(success=False, message=message, data=ActionResult(accepted=False, count=0))
-                self._schedule('manual', self.check, delay=1)
+                self._schedule('queue_wake', self._wake_queue, delay=1)
                 return Response(success=True, message=f'已处理 {count} 个文件',
                                 data=ActionResult(accepted=True, count=count))
         except Exception:
@@ -351,6 +381,7 @@ class DownloadCloudUpload(_PluginBase):
             message = ('未重新上传：任务已完成或115上已有文件，请先核对并刷新。'
                        if payload.action == 'restart' else '任务状态不允许此操作，或没有可处理的文件，请刷新。')
             return Response(success=False, message=message, data=ActionResult(accepted=False, count=0))
+        self._schedule('queue_wake', self._wake_queue, delay=1)
         return Response(success=True, message=f'已处理 {count} 个文件；{self._busy_note()}，结束后自动接着处理。',
                         data=ActionResult(accepted=True, count=count))
 

@@ -644,6 +644,92 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(states, {'盗梦空间.mkv': 'uploading', '别的.mkv': 'ignored'})
         self.assertEqual(self.gateway.uploads, [])
 
+    def test_retry_wakes_queue_without_downloader_scan(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='failed', message='SERVICE_ERROR')
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        instance._enabled = True
+        with patch.object(instance, '_schedule') as schedule:
+            result = instance.api_action(plugin.ActionRequest(action='retry', ids=[row['id']]))
+            self.assertTrue(result.success)
+            self.assertEqual(schedule.call_args.args[0], 'queue_wake')
+            wake = schedule.call_args.args[1]
+            with patch.object(self.engine, 'scan', side_effect=AssertionError('scan must not block retry')):
+                wake()
+                instance._worker.join(timeout=5)
+                self.assertFalse(instance._worker.is_alive())
+                wake()
+                instance._worker.join(timeout=5)
+                self.assertFalse(instance._worker.is_alive())
+        self.assertEqual(self.files()[0]['state'], 'success')
+        self.assertEqual(len(self.gateway.uploads), 1)
+
+    def test_busy_retry_schedules_wake_and_respects_live_worker(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='failed')
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        instance._enabled = True
+        instance._worker = SimpleNamespace(is_alive=lambda: True)
+        with patch.object(instance, '_schedule') as schedule:
+            with self.engine.lock:
+                result = instance.api_action(plugin.ActionRequest(action='retry', ids=[row['id']]))
+            self.assertTrue(result.success)
+            self.assertEqual(schedule.call_args.kwargs['delay'], 1)
+            instance._wake_queue()
+            self.assertEqual(schedule.call_args.kwargs['delay'], 5)
+        self.assertEqual(self.gateway.uploads, [])
+
+    def test_queue_wake_waits_for_old_lease_then_uploads(self):
+        self.enqueue()
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        instance._enabled = True
+        with patch.object(instance, '_schedule') as schedule:
+            with core.worker_lease(self.root / 'worker.lock'):
+                instance._upload_loop()
+                self.assertEqual(self.gateway.uploads, [])
+                self.assertGreaterEqual(schedule.call_args.kwargs['delay'], 5)
+            instance._upload_loop()
+            instance._upload_loop()
+        self.assertEqual(self.files()[0]['state'], 'success')
+        self.assertEqual(len(self.gateway.uploads), 1)
+
+    def test_queue_wake_cannot_start_disabled_or_stopped_plugin(self):
+        self.enqueue()
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        with patch.object(instance, '_schedule') as schedule:
+            instance._wake_queue()
+            instance._enabled = True
+            instance._stop.set()
+            instance._wake_queue()
+            schedule.assert_not_called()
+        self.assertIsNone(instance._worker)
+        self.assertEqual(self.gateway.uploads, [])
+
+    def test_retry_on_stopped_plugin_does_not_report_queue_success(self):
+        self.enqueue()
+        row = self.files()[0]
+        self.store.update(row['id'], state='failed')
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root
+        instance._engine = self.engine
+        instance._stop.set()
+        with patch.object(instance, '_schedule') as schedule:
+            result = instance.api_action(plugin.ActionRequest(action='retry', ids=[row['id']]))
+            self.assertFalse(result.success)
+            schedule.assert_not_called()
+        self.assertEqual(self.files()[0]['state'], 'failed')
+        self.assertEqual(self.gateway.uploads, [])
+
     def test_retry_while_own_worker_busy_is_applied(self):
         _, path = self.enqueue()
         row = self.files()[0]
