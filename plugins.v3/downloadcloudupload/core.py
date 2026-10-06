@@ -22,7 +22,10 @@ LABELS = {
     'queued': '待上传', 'uploading': '上传中', 'verifying': '待核对',
     'retry_wait': '等待重试', 'success': '上传成功', 'already_exists': '远端已存在',
     'conflict': '文件冲突', 'failed': '上传失败', 'ignored': '已忽略',
+    'removed': '下载任务已删除',
 }
+# States that have not crossed the external-write boundary and may be dropped when the task disappears.
+PRE_UPLOAD = ('queued', 'waiting_complete', 'waiting_source', 'retry_wait', 'failed', 'conflict')
 
 
 class UploadError(Exception):
@@ -155,6 +158,22 @@ def digest_file(path: Path, stopped=lambda: False, progress=None):
     return digest.hexdigest()
 
 
+def digest_pair(path: Path, stopped=lambda: False, progress=None):
+    """One read yields the plugin's SHA256 and the SHA1 that 115 lists for every file."""
+    sha256, sha1 = hashlib.sha256(), hashlib.sha1()
+    read = 0
+    with path.open('rb') as source:
+        while chunk := source.read(4 * 1024 * 1024):
+            if stopped():
+                raise UploadError('STOPPED')
+            sha256.update(chunk)
+            sha1.update(chunk)
+            read += len(chunk)
+            if progress:
+                progress(read)
+    return sha256.hexdigest(), sha1.hexdigest().upper()
+
+
 class Store:
     """Transactional, plugin-owned SQLite state with no host database writes."""
 
@@ -181,6 +200,17 @@ class Store:
                     id INTEGER PRIMARY KEY, file_id INTEGER, state TEXT NOT NULL,
                     message TEXT NOT NULL, created REAL NOT NULL);
             ''')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(files)')}
+            if 'sha1' not in columns:
+                db.execute('ALTER TABLE files ADD COLUMN sha1 TEXT')
+            done = db.execute("SELECT 1 FROM meta WHERE key='migration:sha1_proof'").fetchone()
+            if not done:
+                # Before 0.3.6 an existing 115 file could never be proven (lookup had no hash),
+                # so every pre-existing or receipt-less upload was parked as a conflict.
+                db.execute("""UPDATE files SET state=CASE WHEN attempted THEN 'verifying' ELSE 'queued' END,
+                              message='RECHECK_AFTER_UPGRADE', next_at=0, retries=0
+                              WHERE state='conflict' AND message='REMOTE_CONTENT_UNCONFIRMED'""")
+                db.execute("INSERT OR REPLACE INTO meta VALUES ('migration:sha1_proof','true')")
 
     @contextmanager
     def connect(self):
@@ -240,7 +270,7 @@ class Store:
 
     def update(self, file_id: int, **values):
         """Atomically persist a transition and append its credential-free event."""
-        allowed = {'state', 'message', 'signature', 'stable_at', 'digest', 'receipt', 'attempted', 'retries', 'next_at'}
+        allowed = {'state', 'message', 'signature', 'stable_at', 'digest', 'sha1', 'receipt', 'attempted', 'retries', 'next_at'}
         if not values or not set(values) <= allowed:
             raise ValueError('Invalid state update')
         values['updated'] = time.time()
@@ -295,56 +325,98 @@ class Engine:
                 break
             try:
                 tasks = self.gateway.tasks(instance)
+                if any(not task.hash for task in tasks):
+                    # Without identities the list cannot be used to reconcile deletions either.
+                    raise UploadError('TASK_ID_MISSING', False)
                 first = self.store.meta('baseline:' + instance) is None
                 for task in tasks:
-                    if not task.hash:
-                        raise UploadError('TASK_ID_MISSING', False)
-                    existing = self.store.rows('SELECT state FROM torrents WHERE key=?', (task.key,))
                     if backfill == 'preview':
                         if task.complete:
                             preview.append({**asdict(task), 'key': task.key,
                                             'time_unknown': not bool(task.completed_at)})
                         continue
-                    selected = isinstance(backfill, list) and task.key in backfill
-                    if first and task.complete and not selected and not existing:
-                        self.store.torrent(task, 'baseline')
-                        continue
-                    if existing and existing[0]['state'] in {'baseline', 'ignored'} and not selected:
-                        continue
-                    self.store.torrent(task, 'waiting_complete' if not task.complete else 'queued', overwrite=True)
-                    if not task.complete:
-                        continue
-                    if selected and recent_days and (not task.completed_at or task.completed_at < time.time() - recent_days * 86400):
-                        self.store.torrent(task, 'baseline', '完成时间未知或不在补传范围', overwrite=True)
-                        continue
-                    members = self.gateway.files(instance, task.hash)
-                    if not members or any(f.selected and not f.complete for f in members):
-                        self.store.torrent(task, 'waiting_complete', '等待文件清单完成', overwrite=True)
-                        continue
-                    missing_mapping = False
-                    for member in members:
-                        if not member.selected or not member.size or Path(member.name).suffix.lower() not in self.extensions:
-                            continue
-                        if any(keyword in member.name.casefold() for keyword in self.excluded):
-                            continue
-                        relative = PurePosixPath(member.name.replace('\\', '/'))
-                        if relative.is_absolute() or '..' in relative.parts or ':' in str(relative):
-                            raise UploadError('UNSAFE_MEMBER_PATH', False)
-                        full = str(downloader_path(task.save_path).joinpath(*relative.parts))
-                        mapping = map_file(instance, full, self.rules)
-                        if mapping:
-                            self.store.enqueue(task, member, full, mapping)
-                        else:
-                            missing_mapping = True
-                    if missing_mapping:
-                        self.store.torrent(task, 'needs_mapping', overwrite=True)
+                    if self.stopped():
+                        break
+                    try:
+                        self._scan_task(instance, task, first, backfill, recent_days)
+                    except Exception as error:
+                        # One unreadable torrent must not freeze discovery for the whole downloader.
+                        code = error.code if isinstance(error, UploadError) else 'TASK_SCAN_FAILED'
+                        self.store.torrent(task, 'scan_error', code, overwrite=True)
                 if backfill != 'preview':
+                    if not self.stopped():
+                        self.reconcile_removed(instance, {task.key for task in tasks})
                     self.store.set_meta('baseline:' + instance, time.time())
                 self.store.set_meta('connection:' + instance, {'ok': True, 'checked': time.time()})
             except Exception as error:
                 code = error.code if isinstance(error, UploadError) else 'DOWNLOADER_QUERY_FAILED'
                 self.store.set_meta('connection:' + instance, {'ok': False, 'code': code, 'checked': time.time()})
         return preview
+
+    def _scan_task(self, instance, task, first, backfill, recent_days):
+        """Discover one torrent; errors are contained by the caller."""
+        existing = self.store.rows('SELECT state FROM torrents WHERE key=?', (task.key,))
+        selected = isinstance(backfill, list) and task.key in backfill
+        if first and task.complete and not selected and not existing:
+            self.store.torrent(task, 'baseline')
+            return
+        if existing and existing[0]['state'] in {'baseline', 'ignored'} and not selected:
+            return
+        if existing and existing[0]['state'] == 'removed':
+            # The same hash was added back: its never-uploaded members become eligible again.
+            with self.store.connect() as db:
+                db.execute("""UPDATE files SET state='queued',message='TASK_READDED',next_at=0,retries=0,
+                              updated=? WHERE task_key=? AND state='removed' AND attempted=0""",
+                           (time.time(), task.key))
+        self.store.torrent(task, 'waiting_complete' if not task.complete else 'queued', overwrite=True)
+        if not task.complete:
+            return
+        if selected and recent_days and (not task.completed_at or task.completed_at < time.time() - recent_days * 86400):
+            self.store.torrent(task, 'baseline', '完成时间未知或不在补传范围', overwrite=True)
+            return
+        members = self.gateway.files(instance, task.hash)
+        if not members or any(f.selected and not f.complete for f in members):
+            self.store.torrent(task, 'waiting_complete', '等待文件清单完成', overwrite=True)
+            return
+        missing_mapping = False
+        for member in members:
+            if not member.selected or not member.size or Path(member.name).suffix.lower() not in self.extensions:
+                continue
+            if any(keyword in member.name.casefold() for keyword in self.excluded):
+                continue
+            relative = PurePosixPath(member.name.replace('\\', '/'))
+            if relative.is_absolute() or '..' in relative.parts or ':' in str(relative):
+                raise UploadError('UNSAFE_MEMBER_PATH', False)
+            full = str(downloader_path(task.save_path).joinpath(*relative.parts))
+            mapping = map_file(instance, full, self.rules)
+            if mapping:
+                self.store.enqueue(task, member, full, mapping)
+            else:
+                missing_mapping = True
+        if missing_mapping:
+            self.store.torrent(task, 'needs_mapping', overwrite=True)
+
+    def reconcile_removed(self, instance, present):
+        """Drop never-uploaded work for torrents the downloader no longer lists.
+
+        Only called after a successful, complete task-list query. Files that already crossed
+        the upload boundary keep their state and are verified against 115 alone.
+        """
+        known = self.store.rows("SELECT key FROM torrents WHERE instance=? AND state NOT IN ('removed','baseline','ignored')",
+                                (instance,))
+        gone = [row['key'] for row in known if row['key'] not in present]
+        for key in gone:
+            now = time.time()
+            with self.store.connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                ids = [row['id'] for row in db.execute(
+                    'SELECT id FROM files WHERE task_key=? AND attempted=0 AND state IN (%s)' % ','.join('?' * len(PRE_UPLOAD)),
+                    (key, *PRE_UPLOAD))]
+                for file_id in ids:
+                    db.execute("UPDATE files SET state='removed',message='TASK_REMOVED',updated=? WHERE id=?", (now, file_id))
+                    db.execute('INSERT INTO events(file_id,state,message,created) VALUES (?,?,?,?)',
+                               (file_id, 'removed', 'TASK_REMOVED', now))
+                db.execute("UPDATE torrents SET state='removed',message='TASK_REMOVED',updated=? WHERE key=?", (now, key))
 
     def run(self):
         """Poll without overlapping scans; upload one eligible item per invocation."""
@@ -420,6 +492,10 @@ class Engine:
     def _process(self, row):
         """Recheck completion, stable identity, remote collisions and upload receipt."""
         mapping = json.loads(row['mapping'])
+        if row['attempted']:
+            # Bytes were already sent: the outcome lives on 115, not in the torrent or local copy,
+            # so deleting the torrent (or its files) must not strand the row in "待核对".
+            return self._verify(row, mapping)
         path = Path(mapping['local'])
         if not path.resolve().is_relative_to(Path(mapping['root']).resolve()):
             raise UploadError('SOURCE_OUTSIDE_ROOT', False)
@@ -451,25 +527,22 @@ class Engine:
                                      'updated': time.time(), 'can_stop': False})
             except Exception:
                 pass
-        digest = row['digest'] or digest_file(path, self.stopped, hash_progress)
+        digest, sha1 = row['digest'], row.get('sha1')
+        if not digest or not sha1:
+            digest, sha1 = digest_pair(path, self.stopped, hash_progress)
         if signature(path) != sig:
             raise UploadError('SOURCE_CHANGED', False)
-        self.store.update(row['id'], digest=digest)
+        self.store.update(row['id'], digest=digest, sha1=sha1)
+        row = {**row, 'digest': digest, 'sha1': sha1}
         remote = self.gateway.lookup(mapping['storage'], mapping['target'])
         if remote is not None:
             if remote['size'] != row['size']:
                 self.store.update(row['id'], state='conflict', message='REMOTE_SIZE_CONFLICT')
                 return False
-            proof = self._proof(row, remote, digest)
-            if proof:
-                self.store.update(row['id'], state='success' if row['attempted'] else 'already_exists',
-                                  message='VERIFIED_RECEIPT' if row['attempted'] else 'VERIFIED_CONTENT', next_at=0)
+            if self._proof(row, remote, digest):
+                self.store.update(row['id'], state='already_exists', message='VERIFIED_CONTENT', next_at=0)
                 return False
             self.store.update(row['id'], state='conflict', message='REMOTE_CONTENT_UNCONFIRMED')
-            return False
-        if row['attempted']:
-            # An SDK upload may still be in flight after a timeout; never blindly repeat it.
-            self.store.update(row['id'], state='verifying', message='UPLOAD_RESULT_UNKNOWN', next_at=time.time() + 60)
             return False
         folder = self.gateway.folder(mapping['storage'], str(PurePosixPath(mapping['target']).parent), mapping['target_root'])
         # Persist intent before crossing the external-write boundary.
@@ -539,6 +612,8 @@ class Engine:
             except Exception:
                 pass
         progress.preparing = preparing
+        # Already computed above; lets the 115 adapter skip a second full read of the file.
+        progress.filesha1 = sha1
 
         try:
             receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name, progress=progress)
@@ -561,9 +636,50 @@ class Engine:
                 pass
         return True
 
+    def _verify(self, row, mapping):
+        """Settle an attempted upload from 115 alone; bounded so it cannot wait forever."""
+        remote = self.gateway.lookup(mapping['storage'], mapping['target'])
+        if remote is None:
+            retries = row['retries'] + 1
+            if retries > max(self.retry_limit, 3):
+                # Nothing landed on 115: surface it so the user can choose "重新上传".
+                self.store.update(row['id'], state='failed', message='REMOTE_FILE_NOT_FOUND', retries=retries)
+            else:
+                # An SDK upload may still be in flight after a timeout; never blindly repeat it.
+                self.store.update(row['id'], state='verifying', message='UPLOAD_RESULT_UNKNOWN',
+                                  retries=retries, next_at=time.time() + 60)
+            return False
+        if remote['size'] != row['size']:
+            self.store.update(row['id'], state='conflict', message='REMOTE_SIZE_CONFLICT')
+            return False
+        if not row.get('sha1'):
+            # Rows from before 0.3.6 have no SHA1; hash the local copy only if it is still intact.
+            try:
+                path = Path(mapping['local'])
+                if (path.resolve().is_relative_to(Path(mapping['root']).resolve())
+                        and json.dumps(signature(path)) == row['signature']):
+                    digest, sha1 = digest_pair(path, self.stopped)
+                    if digest == row['digest']:
+                        self.store.update(row['id'], sha1=sha1)
+                        row = {**row, 'sha1': sha1}
+            except UploadError as error:
+                if error.code == 'STOPPED':
+                    raise
+            except (OSError, ValueError):
+                pass
+        if self._proof(row, remote, row['digest']):
+            self.store.update(row['id'], state='success', message='VERIFIED_RECEIPT', next_at=0)
+        else:
+            self.store.update(row['id'], state='conflict', message='REMOTE_CONTENT_UNCONFIRMED')
+        return False
+
     def _proof(self, row, remote, digest):
         """Require content evidence or this plugin's own matching upload receipt."""
         if remote.get('sha256') and remote['sha256'] == digest:
+            return True
+        if remote.get('sha1') and row.get('sha1') and str(remote['sha1']).upper() == str(row['sha1']).upper():
+            # 115 lists the SHA1 of every stored file; equal size + SHA1 is the content proof
+            # that lets an existing or receipt-less upload settle instead of becoming a conflict.
             return True
         receipt = json.loads(row['receipt']) if row['receipt'] else None
         if (row['attempted'] and receipt and receipt.get('id') and receipt['id'] in remote.get('ids', [remote.get('id')])

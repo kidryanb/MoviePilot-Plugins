@@ -69,7 +69,8 @@ class Cloud115:
                     raise UploadError('115_INVALID_FILE_LIST')
                 entries.append({'name': raw['n'], 'type': 'file' if is_file else 'dir',
                                 'id': str(identifier), 'size': int(raw.get('s', 0)),
-                                'pickcode': str(raw.get('pc') or '')})
+                                'pickcode': str(raw.get('pc') or ''),
+                                'sha1': str(raw.get('sha') or '').upper() if is_file else ''})
             offset += len(data)
             if offset == count:
                 return entries
@@ -106,7 +107,10 @@ class Cloud115:
             ids = [account + ':' + item['id']]
             if item['pickcode']:
                 ids.append(account + ':' + item['pickcode'])
-            return {'id': ids[0], 'ids': ids, 'size': item['size'], 'confirmed': True}
+            result = {'id': ids[0], 'ids': ids, 'size': item['size'], 'confirmed': True}
+            if len(item.get('sha1') or '') == 40:
+                result['sha1'] = item['sha1']
+            return result
         except UploadError:
             raise
         except Exception:
@@ -185,7 +189,14 @@ class Cloud115:
                     notify(bool(options))
             prepare = getattr(progress, 'preparing', None)
             # Give the SDK a complete SHA1 so its hidden local scan has visible progress.
-            if callable(prepare):
+            known = getattr(progress, 'filesha1', None)
+            if isinstance(known, str) and len(known) == 40:
+                # The engine hashed this exact, signature-checked file moments ago.
+                if callable(prepare):
+                    prepare(0)
+                    prepare(path.stat().st_size)
+                options['filesha1'] = known.upper()
+            elif callable(prepare):
                 digest, read = hashlib.sha1(), 0
                 prepare(0)
                 with path.open('rb') as source:

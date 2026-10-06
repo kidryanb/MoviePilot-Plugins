@@ -293,6 +293,124 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(core.map_file('qb', '/data/tv-old/episode.mkv', rules)['target'], '/影视/tv-old/episode.mkv')
         self.assertIsNone(core.map_file('qb', '/data-old/test.mkv', rules))
 
+    def visible(self):
+        return json.dumps(plugin.queue_page(self.store.page_snapshot()), ensure_ascii=False)
+
+    def test_deleted_torrent_disappears_from_page_and_queue(self):
+        self.engine.scan()
+        self.add(hash_string='pending', name='待传.mkv')
+        self.add(hash_string='downloading', complete=False, name='下载中.mkv')
+        self.engine.scan()
+        with patch.object(self.gateway, 'ready', return_value=False):
+            self.engine.process(budget=100)
+        self.assertIn('某剧', self.visible())
+        self.gateway.snapshots['qb'] = []
+        self.engine.scan()
+        self.assertEqual({row['state'] for row in self.files()}, {'removed'})
+        self.assertIn('暂无待上传任务', self.visible())
+        self.engine.process(budget=100)
+        self.assertEqual(self.gateway.uploads, [])
+
+    def test_failed_source_of_deleted_torrent_is_removed(self):
+        _, path = self.enqueue()
+        path.unlink()
+        for _ in range(7):
+            with self.store.connect() as db:
+                db.execute('UPDATE files SET next_at=0')
+            self.engine.process()
+        self.assertEqual(self.files()[0]['state'], 'failed')
+        self.gateway.snapshots['qb'] = []
+        self.engine.scan()
+        self.assertEqual(self.files()[0]['state'], 'removed')
+
+    def test_readded_torrent_is_queued_again(self):
+        task, _ = self.enqueue()
+        saved = list(self.gateway.snapshots['qb'])
+        self.gateway.snapshots['qb'] = []
+        self.engine.scan()
+        self.gateway.snapshots['qb'] = saved
+        self.engine.scan()
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'success')
+
+    def test_query_failure_never_removes_tasks(self):
+        self.enqueue()
+        self.gateway.query_error = True
+        self.engine.scan()
+        self.assertEqual(self.files()[0]['state'], 'queued')
+
+    def test_one_bad_torrent_does_not_block_others(self):
+        self.engine.scan()
+        self.add(hash_string='bad', name='坏.mkv')
+        self.add(hash_string='good', name='好.mkv')
+        original = self.gateway.files
+        def files(instance, hash_string):
+            if hash_string == 'bad':
+                raise core.UploadError('FILE_LIST_UNAVAILABLE')
+            return original(instance, hash_string)
+        self.gateway.files = files
+        self.engine.scan()
+        self.assertEqual([row['name'] for row in self.files()], ['好.mkv'])
+
+    def test_uploaded_then_torrent_and_files_deleted_still_verifies(self):
+        _, path = self.enqueue()
+        self.engine.process()
+        self.engine.process()  # upload -> verifying
+        self.assertEqual(self.files()[0]['state'], 'verifying')
+        path.unlink()
+        self.gateway.snapshots['qb'] = []
+        self.engine.scan()
+        self.assertEqual(self.files()[0]['state'], 'verifying')
+        self.engine.process()
+        self.assertEqual(self.files()[0]['state'], 'success')
+        self.assertIn('暂无待上传任务', self.visible())
+
+    def test_existing_remote_with_matching_sha1_is_already_exists(self):
+        self.enqueue()
+        self.gateway.remote[('115网盘Plus', '/影视/剧/第01集.mkv')] = {
+            'id': 'manual', 'size': 5, 'confirmed': True, 'sha1': hashlib.sha1(b'video').hexdigest().upper()}
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'already_exists')
+        self.assertEqual(self.gateway.uploads, [])
+
+    def test_receiptless_upload_settles_by_sha1(self):
+        self.enqueue()
+        self.gateway.upload_error = True
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'verifying')
+        self.gateway.remote[('115网盘Plus', '/影视/剧/第01集.mkv')] = {
+            'id': 'late', 'size': 5, 'confirmed': True, 'sha1': hashlib.sha1(b'video').hexdigest()}
+        with self.store.connect() as db:
+            db.execute('UPDATE files SET next_at=0')
+        self.engine.process()
+        self.assertEqual(self.files()[0]['state'], 'success')
+        self.assertEqual(len(self.gateway.uploads), 1)
+
+    def test_verifying_without_remote_file_is_bounded(self):
+        self.enqueue()
+        self.gateway.upload_error = True
+        self.advance()
+        for _ in range(8):
+            with self.store.connect() as db:
+                db.execute('UPDATE files SET next_at=0')
+            self.engine.process()
+        row = self.files()[0]
+        self.assertEqual((row['state'], row['message']), ('failed', 'REMOTE_FILE_NOT_FOUND'))
+        self.assertEqual(self.engine.action([row['id']], 'restart'), 1)
+
+    def test_upgrade_rechecks_legacy_unconfirmed_conflicts(self):
+        self.enqueue()
+        self.gateway.remote[('115网盘Plus', '/影视/剧/第01集.mkv')] = {'id': 'x', 'size': 5, 'confirmed': True}
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'conflict')
+        with self.store.connect() as db:
+            db.execute("DELETE FROM meta WHERE key='migration:sha1_proof'")
+        core.Store(self.store.path)
+        self.assertEqual(self.files()[0]['state'], 'queued')
+        self.gateway.remote[('115网盘Plus', '/影视/剧/第01集.mkv')]['sha1'] = hashlib.sha1(b'video').hexdigest()
+        self.advance()
+        self.assertEqual(self.files()[0]['state'], 'already_exists')
+
     def test_windows_downloader_to_host_path(self):
         rule = {**self.rules[0], 'source': 'D:\\Downloads'}
         result = core.map_file('qb', 'D:\\Downloads\\剧\\第01集.mkv', [rule])
@@ -317,7 +435,8 @@ class QueueTest(unittest.TestCase):
         self.engine.process()
         path.write_bytes(b'other')
         self.advance()
-        self.assertEqual(self.files()[0]['state'], 'failed')
+        # The receipt proves what was sent before the change; verification only consults 115.
+        self.assertEqual(self.files()[0]['state'], 'success')
         self.assertEqual(len(self.gateway.uploads), 1)
 
     def test_instance_query_failure_isolated(self):
@@ -703,6 +822,28 @@ class DirectCloudTest(unittest.TestCase):
         self.client = SimpleNamespace(fs_files=listing, fs_mkdir=mkdir, upload_file=upload)
         self.cloud = cloud_module.Cloud115()
         self.cloud.client = lambda: (self.client, 'account')
+
+    def test_lookup_exposes_listed_sha1(self):
+        self.items['10'].append({'fid': '91', 'cid': '10', 'n': 'a.mkv', 's': 5, 'pc': 'pc',
+                                 'sha': hashlib.sha1(b'video').hexdigest()})
+        remote = self.cloud.lookup('/影视/a.mkv')
+        self.assertEqual(remote['sha1'], hashlib.sha1(b'video').hexdigest().upper())
+
+    def test_precomputed_sha1_skips_second_read(self):
+        prepared = []
+        def progress(increment):
+            pass
+        progress.preparing = prepared.append
+        progress.filesha1 = 'A' * 40
+        def instant(**kwargs):
+            self.assertEqual(kwargs['filesha1'], 'A' * 40)
+            return {'state': True, 'reuse': True, 'data': {'pickcode': 'pc'}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'video.mkv'
+            path.write_bytes(b'video')
+            folder = {'client': SimpleNamespace(upload_file=instant), 'id': '10', 'account': 'account'}
+            self.cloud.upload(folder, path, path.name, progress=progress)
+        self.assertEqual(prepared, [0, 5])
 
     def test_sdk_progress_callback_is_only_passed_when_supported(self):
         with tempfile.TemporaryDirectory() as directory:
