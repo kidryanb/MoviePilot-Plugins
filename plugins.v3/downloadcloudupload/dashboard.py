@@ -12,11 +12,15 @@ FINISHED = {'success', 'already_exists'}
 ATTENTION = {'failed', 'conflict'}
 STATUS = {'uploading': '上传中', 'verifying': '确认上传结果', 'queued': '等待上传',
           'waiting_complete': '等待下载完成', 'waiting_source': '等待本地文件',
-          'retry_wait': '等待重试', 'failed': '上传失败', 'conflict': '文件冲突'}
+          'retry_wait': '等待重试', 'failed': '上传失败', 'conflict': '文件冲突',
+          'success': '上传成功', 'already_exists': '远端已存在', 'ignored': '已忽略'}
 REASONS = {'REMOTE_FILE_NOT_FOUND': '115 上始终没有该文件，可点“重新上传”',
            'REMOTE_SIZE_CONFLICT': '115 已有同名文件但大小不同',
            'REMOTE_CONTENT_UNCONFIRMED': '115 已有同名文件，内容无法确认',
-           'SOURCE_MISSING': '本地文件不存在'}
+           'SOURCE_MISSING': '本地文件不存在',
+           'VERIFIED_RECEIPT': '已核对上传回执',
+           'VERIFIED_CONTENT': '远端内容一致',
+           'USER_IGNORED': '用户已忽略'}
 
 
 def action_button(plugin_id, file_id, action, title, disabled=False, confirmed=False):
@@ -34,6 +38,51 @@ def size(value):
         if value < 1024 or unit == 'TB':
             return f'{value:.1f} {unit}'
         value /= 1024
+
+
+def format_time(value):
+    """Local wall-clock display for recent history rows."""
+    try:
+        return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(float(value)))
+    except (TypeError, ValueError, OSError):
+        return '-'
+
+
+def history_label(row):
+    """One-line, credential-free summary for page and dashboard."""
+    state = STATUS.get(row.get('state'), row.get('state') or '-')
+    reason = REASONS.get(row.get('message') or '', '')
+    source = PurePosixPath(str(row.get('source_name') or '').replace('\\', '/')).name or row.get('source_name') or '-'
+    title = (row.get('title') or '').strip() or source
+    target = row.get('target') or '-'
+    text = f"{format_time(row.get('created'))} · {title} · {source} → {target} · {state} · {size(row.get('size') or 0)}"
+    if reason:
+        text += f' · {reason}'
+    elif row.get('message'):
+        text += f" · {row['message']}"
+    return text
+
+
+def history_section(rows, plugin_id='DownloadCloudUpload', title='近期上传记录', empty='暂无上传历史'):
+    """Browse terminal upload outcomes without actions that mutate the queue."""
+    section = [{'component': 'div', 'props': {'class': 'd-flex align-center justify-space-between mb-2 mt-4'},
+                'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2'}, 'text': title},
+                            {'component': 'VBtn', 'props': {'variant': 'text', 'size': 'small',
+                             'prepend-icon': 'mdi-refresh'},
+                             'events': {'click': {'api': f'plugin/{plugin_id}/status', 'method': 'GET'}},
+                             'text': '刷新'}]}]
+    if not rows:
+        section.append({'component': 'div', 'props': {'class': 'text-center pa-4 text-medium-emphasis'},
+                        'text': empty})
+        return section
+    cards = []
+    for row in rows:
+        cards.append({'component': 'div', 'props': {'class': 'text-caption mb-2',
+                      'style': {'overflowWrap': 'anywhere', 'whiteSpace': 'normal'}},
+                      'text': history_label(row)})
+    section.append({'component': 'VCard', 'props': {'variant': 'tonal', 'class': 'mb-3'},
+                    'content': [{'component': 'VCardText', 'content': cards}]})
+    return section
 
 
 def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
@@ -155,4 +204,13 @@ def queue_page(store, plugin_id='DownloadCloudUpload', worker_busy=False):
             page.extend(groups[key])
     if not tasks:
         page.append({'component': 'div', 'props': {'class': 'text-center pa-6'}, 'text': '暂无待上传任务'})
+    history_rows = getattr(store, 'history', None)
+    if callable(history_rows):
+        try:
+            rows = history_rows(limit=20)
+        except TypeError:
+            rows = []
+    else:
+        rows = list(history_rows or [])
+    page.extend(history_section(rows, plugin_id))
     return page

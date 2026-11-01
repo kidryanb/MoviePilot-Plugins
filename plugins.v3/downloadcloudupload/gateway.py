@@ -144,5 +144,5 @@ class MPGateway:
         self._check_storage(storage)
         return self.cloud.folder(target, root)
 
-    def upload(self, folder, path, name, progress=None):
-        return self.cloud.upload(folder, path, name, progress=progress)
+    def upload(self, folder, path, name, progress=None, speed_limit_bps=0):
+        return self.cloud.upload(folder, path, name, progress=progress, speed_limit_bps=speed_limit_bps)
