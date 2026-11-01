@@ -4,6 +4,7 @@ from http.cookies import SimpleCookie
 from pathlib import PurePosixPath
 from collections import Counter
 import hashlib
+import time
 
 from .core import UploadError, UploadStopped
 
@@ -29,6 +30,33 @@ def checked(response):
     if not isinstance(response, dict) or response.get('state') not in (True, 1):
         raise UploadError('115_REQUEST_FAILED')
     return response
+
+
+def throttle_progress(progress, speed_limit_bps=0):
+    """Pace SDK byte callbacks so average send rate stays under speed_limit_bps.
+
+    Local SHA1 preparation uses progress.preparing and is intentionally not limited.
+    0 or negative values leave the original callback unchanged (unlimited).
+    """
+    if progress is None or not speed_limit_bps or speed_limit_bps <= 0:
+        return progress
+    started = time.monotonic()
+    sent = 0
+
+    def wrapped(increment):
+        nonlocal sent
+        result = progress(increment)
+        sent += max(0, int(increment or 0))
+        expected = sent / float(speed_limit_bps)
+        delay = expected - (time.monotonic() - started)
+        if delay > 0:
+            time.sleep(min(delay, 5.0))
+        return result
+
+    for name in ('set_supported', 'preparing', 'filesha1'):
+        if hasattr(progress, name):
+            setattr(wrapped, name, getattr(progress, name))
+    return wrapped
 
 
 class Cloud115:
@@ -160,11 +188,12 @@ class Cloud115:
             raise UploadError('TARGET_FOLDER_UNAVAILABLE') from None
 
     @staticmethod
-    def upload(folder, path, name, progress=None):
+    def upload(folder, path, name, progress=None, speed_limit_bps=0):
         """Only a provider receipt authorizes successful queue reconciliation."""
         try:
             from inspect import signature
             options = {}
+            progress = throttle_progress(progress, speed_limit_bps)
             # Only named SDK parameters are safe; **kwargs may reach HTTP requests.
             try:
                 parameters = signature(folder['client'].upload_file).parameters

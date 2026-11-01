@@ -199,6 +199,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY, file_id INTEGER, state TEXT NOT NULL,
                     message TEXT NOT NULL, created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS history (
+                    id INTEGER PRIMARY KEY, file_id INTEGER, title TEXT NOT NULL,
+                    source_name TEXT NOT NULL, target TEXT NOT NULL, size INTEGER NOT NULL,
+                    state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', created REAL NOT NULL);
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(files)')}
             if 'sha1' not in columns:
@@ -211,6 +215,16 @@ class Store:
                               message='RECHECK_AFTER_UPGRADE', next_at=0, retries=0
                               WHERE state='conflict' AND message='REMOTE_CONTENT_UNCONFIRMED'""")
                 db.execute("INSERT OR REPLACE INTO meta VALUES ('migration:sha1_proof','true')")
+            seeded = db.execute("SELECT 1 FROM meta WHERE key='migration:history_seed'").fetchone()
+            if not seeded:
+                db.execute('''INSERT INTO history(file_id,title,source_name,target,size,state,message,created)
+                    SELECT f.id, COALESCE(t.title,''), f.name,
+                           COALESCE(json_extract(f.mapping,'$.target'),''), f.size, f.state, f.message, f.updated
+                    FROM files f LEFT JOIN torrents t ON t.key=f.task_key
+                    WHERE f.state IN ('success','already_exists','failed','conflict','ignored')
+                    ORDER BY f.updated DESC LIMIT 200''')
+                db.execute("INSERT OR REPLACE INTO meta VALUES ('migration:history_seed','true')")
+                self._prune_history(db)
 
     @contextmanager
     def connect(self):
@@ -228,6 +242,10 @@ class Store:
         with self.connect() as db:
             return [dict(row) for row in db.execute(sql, parameters)]
 
+    HISTORY_LIMIT = 200
+    EVENT_LIMIT = 2000
+    HISTORY_STATES = frozenset({'success', 'already_exists', 'failed', 'conflict', 'ignored'})
+
     def page_snapshot(self):
         """Read the entire display in one bounded, read-only transaction."""
         db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.2)
@@ -236,9 +254,11 @@ class Store:
             db.execute('BEGIN')
             tasks = [dict(row) for row in db.execute('SELECT * FROM torrents ORDER BY updated DESC')]
             files = [dict(row) for row in db.execute('SELECT * FROM files ORDER BY id')]
+            history = [dict(row) for row in db.execute(
+                'SELECT * FROM history ORDER BY id DESC LIMIT 50')]
             metadata = {row['key']: json.loads(row['value']) for row in db.execute(
                 "SELECT key,value FROM meta WHERE key LIKE 'upload_progress:%' OR key LIKE 'restart_request:%' OR key LIKE 'restart_confirmation:%'")}
-            return PageSnapshot(tasks, files, metadata)
+            return PageSnapshot(tasks, files, metadata, history)
         finally:
             db.close()
 
@@ -268,6 +288,61 @@ class Store:
                 (task_key,name,size,full_path,mapping,updated) VALUES (?,?,?,?,?,?)''',
                        (task.key, member.name, member.size, full_path, json.dumps(mapping), time.time()))
 
+    @staticmethod
+    def _safe_text(value, limit=240):
+        """Keep display text free of cookies and control characters."""
+        text = str(value or '').replace('\x00', '').strip()
+        for token in ('UID=', 'CID=', 'SEID=', 'Cookie:', 'Authorization:'):
+            if token.lower() in text.lower():
+                return 'REDACTED'
+        return text[:limit]
+
+    @staticmethod
+    def _source_label(name: str) -> str:
+        """Show only the torrent-relative path basename for history display."""
+        relative = PurePosixPath(str(name or '').replace('\\', '/'))
+        return relative.name or str(relative)
+
+    def record_history(self, file_id: int, title: str, source_name: str, target: str,
+                       size: int, state: str, message=''):
+        """Append a terminal upload outcome; success rows in files remain for dedup."""
+        if state not in self.HISTORY_STATES:
+            return
+        with self.connect() as db:
+            db.execute('''INSERT INTO history(file_id,title,source_name,target,size,state,message,created)
+                          VALUES (?,?,?,?,?,?,?,?)''',
+                       (file_id, self._safe_text(title, 160), self._source_label(source_name),
+                        self._safe_text(target, 320), int(size or 0), state,
+                        self._safe_text(message, 120), time.time()))
+            self._prune_history(db)
+            self._prune_events(db)
+
+    def history(self, limit=20, offset=0):
+        """Return recent upload outcomes newest-first, without credentials."""
+        limit = max(1, min(100, int(limit)))
+        offset = max(0, min(10000, int(offset)))
+        return self.rows('SELECT * FROM history ORDER BY id DESC LIMIT ? OFFSET ?', (limit, offset))
+
+    def history_count(self):
+        rows = self.rows('SELECT COUNT(*) AS total FROM history')
+        return int(rows[0]['total']) if rows else 0
+
+    @classmethod
+    def _prune_history(cls, db, keep=None):
+        keep = cls.HISTORY_LIMIT if keep is None else keep
+        total = db.execute('SELECT COUNT(*) AS total FROM history').fetchone()['total']
+        if total > keep:
+            db.execute('DELETE FROM history WHERE id IN (SELECT id FROM history ORDER BY id ASC LIMIT ?)',
+                       (total - keep,))
+
+    @classmethod
+    def _prune_events(cls, db, keep=None):
+        keep = cls.EVENT_LIMIT if keep is None else keep
+        total = db.execute('SELECT COUNT(*) AS total FROM events').fetchone()['total']
+        if total > keep:
+            db.execute('DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY id ASC LIMIT ?)',
+                       (total - keep,))
+
     def update(self, file_id: int, **values):
         """Atomically persist a transition and append its credential-free event."""
         allowed = {'state', 'message', 'signature', 'stable_at', 'digest', 'sha1', 'receipt', 'attempted', 'retries', 'next_at'}
@@ -280,13 +355,15 @@ class Store:
             if 'state' in values:
                 db.execute('INSERT INTO events(file_id,state,message,created) VALUES (?,?,?,?)',
                            (file_id, values['state'], values.get('message', ''), time.time()))
+                self._prune_events(db)
 
 
 class PageSnapshot:
     """Detached queue data; rendering never opens the writer's database."""
 
-    def __init__(self, tasks, files, metadata):
+    def __init__(self, tasks, files, metadata, history=None):
         self.tasks, self.files, self.metadata = tasks, files, metadata
+        self.history = list(history or [])
 
     def rows(self, sql, parameters=()):
         if parameters:
@@ -307,15 +384,31 @@ class Engine:
 
     def __init__(self, store: Store, gateway, rules: list[dict], instances: list[str],
                  stable_seconds=10, retry_limit=5, sidecars=False, stopped=lambda: False,
-                 extensions=None, excluded=None):
+                 extensions=None, excluded=None, upload_speed_limit=0):
         self.store, self.gateway = store, gateway
         self.rules = validate_rules(rules)
         self.instances = instances
         self.stable_seconds, self.retry_limit = stable_seconds, retry_limit
+        # KB/s from config; 0 means unlimited. Convert once for the 115 client path.
+        self.upload_speed_limit = max(0, int(upload_speed_limit or 0))
         self.extensions = (set(extensions) if extensions is not None else VIDEO_EXTENSIONS) | (SIDECAR_EXTENSIONS if sidecars else set())
         self.excluded = [str(value).casefold() for value in (excluded or []) if value]
         self.stopped = stopped
         self.lock = threading.Lock()
+
+    def _history(self, row, state, message=''):
+        """Persist a browsable outcome without storing absolute local paths or cookies."""
+        try:
+            mapping = json.loads(row['mapping']) if row.get('mapping') else {}
+        except (TypeError, ValueError):
+            mapping = {}
+        title = row.get('title') or ''
+        if not title and row.get('task_key'):
+            tasks = self.store.rows('SELECT title FROM torrents WHERE key=?', (row['task_key'],))
+            title = tasks[0]['title'] if tasks else ''
+        self.store.record_history(
+            row['id'], title, row.get('name') or '',
+            mapping.get('target') or '', row.get('size') or 0, state, message or row.get('message') or '')
 
     def scan(self, backfill=None, recent_days=0):
         """Initialize successful baselines and queue only complete selected files."""
@@ -567,11 +660,14 @@ class Engine:
         if remote is not None:
             if remote['size'] != row['size']:
                 self.store.update(row['id'], state='conflict', message='REMOTE_SIZE_CONFLICT')
+                self._history(row, 'conflict', 'REMOTE_SIZE_CONFLICT')
                 return False
             if self._proof(row, remote, digest):
                 self.store.update(row['id'], state='already_exists', message='VERIFIED_CONTENT', next_at=0)
+                self._history(row, 'already_exists', 'VERIFIED_CONTENT')
                 return False
             self.store.update(row['id'], state='conflict', message='REMOTE_CONTENT_UNCONFIRMED')
+            self._history(row, 'conflict', 'REMOTE_CONTENT_UNCONFIRMED')
             return False
         folder = self.gateway.folder(mapping['storage'], str(PurePosixPath(mapping['target']).parent), mapping['target_root'])
         # Persist intent before crossing the external-write boundary.
@@ -645,7 +741,12 @@ class Engine:
         progress.filesha1 = sha1
 
         try:
-            receipt = self.gateway.upload(folder, path, PurePosixPath(mapping['target']).name, progress=progress)
+            upload_kwargs = {}
+            if self.upload_speed_limit > 0:
+                upload_kwargs['speed_limit_bps'] = self.upload_speed_limit * 1024
+            receipt = self.gateway.upload(
+                folder, path, PurePosixPath(mapping['target']).name, progress=progress,
+                **upload_kwargs)
         except Exception:
             if stop_requested:
                 # HTTP adapters may wrap the iterator's cancellation exception.
@@ -687,6 +788,7 @@ class Engine:
             if retries > allowance:
                 # Nothing landed on 115: surface it so the user can choose "重新上传".
                 self.store.update(row['id'], state='failed', message='REMOTE_FILE_NOT_FOUND', retries=retries)
+                self._history(row, 'failed', 'REMOTE_FILE_NOT_FOUND')
             else:
                 # An SDK upload may still be in flight after a timeout; never blindly repeat it.
                 self.store.update(row['id'], state='verifying', message='UPLOAD_RESULT_UNKNOWN',
@@ -694,6 +796,7 @@ class Engine:
             return False
         if remote['size'] != row['size']:
             self.store.update(row['id'], state='conflict', message='REMOTE_SIZE_CONFLICT')
+            self._history(row, 'conflict', 'REMOTE_SIZE_CONFLICT')
             return False
         if not row.get('sha1'):
             # Rows from before 0.3.6 have no SHA1; hash the local copy only if it is still intact.
@@ -712,8 +815,10 @@ class Engine:
                 pass
         if self._proof(row, remote, row['digest']):
             self.store.update(row['id'], state='success', message='VERIFIED_RECEIPT', next_at=0)
+            self._history(row, 'success', 'VERIFIED_RECEIPT')
         else:
             self.store.update(row['id'], state='conflict', message='REMOTE_CONTENT_UNCONFIRMED')
+            self._history(row, 'conflict', 'REMOTE_CONTENT_UNCONFIRMED')
         return False
 
     def _proof(self, row, remote, digest):
@@ -747,13 +852,16 @@ class Engine:
         retryable = not isinstance(error, UploadError) or error.retryable
         retries = current['retries'] + 1
         if current['attempted'] and retryable:
-            self.store.update(row['id'], state='verifying' if retries <= self.retry_limit else 'failed',
-                              message=code, retries=retries, next_at=time.time() + 60)
+            state = 'verifying' if retries <= self.retry_limit else 'failed'
+            self.store.update(row['id'], state=state, message=code, retries=retries, next_at=time.time() + 60)
+            if state == 'failed':
+                self._history({**row, **current}, 'failed', code)
         elif retryable and retries <= self.retry_limit:
             delay = [60, 300, 900, 1800, 3600][min(retries - 1, 4)]
             self.store.update(row['id'], state='retry_wait', message=code, retries=retries, next_at=time.time() + delay)
         else:
             self.store.update(row['id'], state='failed', message=code, retries=retries)
+            self._history({**row, **current}, 'failed', code)
 
     def action(self, ids: list[int], action: str, allow_stale_upload=False):
         """Perform explicit file actions without discarding successful deduplication."""
@@ -787,6 +895,8 @@ class Engine:
                     db.execute('UPDATE files SET mapping=? WHERE id=?', (json.dumps(mapping), file_id))
             state = 'ignored' if action == 'ignore' else ('verifying' if row['attempted'] else 'queued')
             self.store.update(file_id, state=state, message='', next_at=0, retries=0)
+            if state == 'ignored':
+                self._history(row, 'ignored', 'USER_IGNORED')
             changed += 1
         return changed
 

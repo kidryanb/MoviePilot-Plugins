@@ -23,7 +23,7 @@ from .gateway import MPGateway
 from .cloud115 import Cloud115, strm_cookie
 from .picker import local_folders, folder_picker
 from .organizer import Organizer
-from .dashboard import queue_page
+from .dashboard import queue_page, history_section, size as format_size, format_time, STATUS, REASONS
 
 
 class FolderRequest(BaseModel):
@@ -93,13 +93,40 @@ class MappingResult(BaseModel):
     target: str = ''
 
 
+class HistoryRequest(BaseModel):
+    """Paginated history query; keeps the response bounded."""
+
+    offset: int = Field(default=0, ge=0, le=10000)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class HistoryEntry(BaseModel):
+    """Credential-free upload outcome for the native page and API clients."""
+
+    id: int
+    time: str
+    title: str
+    source: str
+    target: str
+    size: str
+    status: str
+    error: str = ''
+
+
+class HistoryResult(BaseModel):
+    total: int = 0
+    offset: int = 0
+    limit: int = 20
+    items: list[HistoryEntry] = Field(default_factory=list)
+
+
 class DownloadCloudUpload(_PluginBase):
     """Discover completed downloads and upload a durable, source-preserving queue."""
 
     plugin_name = '下载完成自动上传'
     plugin_desc = '下载完成上传115，可接管 MP 自动整理并监控 STRM 本地目录。'
     plugin_icon = 'cloud.png'
-    plugin_version = '0.3.9'
+    plugin_version = '0.4.0'
     plugin_author = 'kidryanb'
     author_url = 'https://github.com/kidryanb'
     plugin_config_prefix = 'downloadcloudupload_'
@@ -139,8 +166,16 @@ class DownloadCloudUpload(_PluginBase):
             interval = int(self._config.get('interval', 60))
             stable = int(self._config.get('stable_seconds', 10))
             retries = int(self._config.get('retry_limit', 5))
+            speed_raw = self._config.get('upload_speed_limit', 0)
+            if speed_raw in (None, ''):
+                speed_limit = 0
+            else:
+                speed_limit = int(speed_raw)
             if not 30 <= interval <= 3600 or not 1 <= stable <= 3600 or not 0 <= retries <= 10:
                 raise ValueError('检查周期、稳定等待或重试次数超出范围')
+            if not 0 <= speed_limit <= 1048576:
+                raise ValueError('上传速度限制须在 0～1048576 KB/s 之间（0=不限速）')
+            self._config['upload_speed_limit'] = speed_limit
             gateway = MPGateway()
             names = list(self._config.get('downloaders') or [])
             if any(not isinstance(name, str) for name in names):
@@ -155,7 +190,8 @@ class DownloadCloudUpload(_PluginBase):
                                   self._config.get('rules') or [], names,
                                   stable_seconds=stable, retry_limit=retries,
                                   sidecars=bool(self._config.get('sidecars')), stopped=self._stop.is_set,
-                                  extensions=[ext.lower() for ext in extensions], excluded=excluded)
+                                  extensions=[ext.lower() for ext in extensions], excluded=excluded,
+                                  upload_speed_limit=speed_limit)
             self._enabled = bool(self._config.get('enabled'))
             if self._enabled and (not names or not self._engine.rules):
                 raise ValueError('请选择下载器并添加文件夹规则')
@@ -442,6 +478,7 @@ class DownloadCloudUpload(_PluginBase):
                     ('/status', self.api_status, 'GET', '刷新上传任务状态', Response[ActionResult]),
                     ('/confirmation', self.api_confirmation, 'POST', '确认重新上传', Response[ActionResult]),
                     ('/folders', self.api_folders, 'POST', '浏览本地或115目录', Response[FolderResult]),
+                    ('/history', self.api_history, 'POST', '查看上传历史', Response[HistoryResult]),
                 ]]
 
     def api_folders(self, payload: FolderRequest) -> Response[FolderResult]:
@@ -498,7 +535,8 @@ class DownloadCloudUpload(_PluginBase):
         reset_rule = '''function() {rule_index=null;rule_name='';rule_instance='';rule_source='';
             rule_local='';rule_target='';rule_enabled=true;}'''
         defaults = {'enabled': False, 'strm_path': '', 'downloaders': [], 'interval': 60, 'stable_seconds': 10,
-                    'retry_limit': 5, 'sidecars': False, 'extensions': sorted(VIDEO_EXTENSIONS), 'excluded': [],
+                    'retry_limit': 5, 'upload_speed_limit': 0, 'sidecars': False,
+                    'extensions': sorted(VIDEO_EXTENSIONS), 'excluded': [],
                     'backfill_days': 0, 'rules': [], 'rule_index': None,
                     'rule_name': '', 'rule_instance': '', 'rule_source': '', 'rule_local': '',
                     'rule_target': '', 'rule_enabled': True,
@@ -522,6 +560,8 @@ class DownloadCloudUpload(_PluginBase):
             control('VTextField', 'interval', '检查周期（秒）', type='number', min=30, max=3600),
             control('VTextField', 'stable_seconds', '文件稳定等待（秒）', type='number', min=1, max=3600),
             control('VTextField', 'retry_limit', '自动重试次数', type='number', min=0, max=10),
+            control('VTextField', 'upload_speed_limit', '上传速度限制（KB/s，0或不填=不限速）',
+                    type='number', min=0, max=1048576, placeholder='0'),
             control('VSwitch', 'sidecars', '附带上传任务内的字幕及音轨'),
             control('VCombobox', 'extensions', '视频扩展名', items=sorted(VIDEO_EXTENSIONS), multiple=True, chips=True),
             control('VCombobox', 'excluded', '排除路径关键词（输入后回车）', multiple=True, chips=True),
@@ -586,6 +626,64 @@ class DownloadCloudUpload(_PluginBase):
     def api_status(self) -> Response[ActionResult]:
         """Let the native page emit its refresh event without starting cloud work."""
         return Response(success=True, data=ActionResult(accepted=True))
+
+    def _history_entries(self, rows):
+        """Map durable history rows into API/page-safe summaries."""
+        items = []
+        for row in rows:
+            message = row.get('message') or ''
+            items.append(HistoryEntry(
+                id=int(row['id']),
+                time=format_time(row.get('created')),
+                title=str(row.get('title') or '')[:160],
+                source=str(row.get('source_name') or '')[:240],
+                target=str(row.get('target') or '')[:320],
+                size=format_size(row.get('size') or 0),
+                status=STATUS.get(row.get('state'), row.get('state') or '-'),
+                error=REASONS.get(message, message)[:120] if message else '',
+            ))
+        return items
+
+    def api_history(self, payload: HistoryRequest) -> Response[HistoryResult]:
+        """Return recent upload outcomes with pagination; no cookies or local roots."""
+        if not self._engine:
+            return Response(success=False, message='请先配置并启用插件')
+        try:
+            rows = self._engine.store.history(limit=payload.limit, offset=payload.offset)
+            total = self._engine.store.history_count()
+            return Response(success=True, data=HistoryResult(
+                total=total, offset=payload.offset, limit=payload.limit,
+                items=self._history_entries(rows)))
+        except Exception:
+            return Response(success=False, message='无法读取上传历史，请稍后重试。')
+
+    def get_dashboard_meta(self):
+        """Register a compact homepage widget for recent upload outcomes."""
+        return [{'key': 'upload_history', 'name': '上传历史'}]
+
+    def get_dashboard(self, key='', **kwargs):
+        """Render recent history for the MoviePilot dashboard grid."""
+        _ = kwargs
+        elements = []
+        if self._error:
+            elements.append({'component': 'VAlert', 'props': {'type': 'error', 'variant': 'tonal',
+                             'text': self._error}})
+        elif not self._engine:
+            elements.append({'component': 'div', 'props': {'class': 'text-medium-emphasis pa-2'},
+                             'text': '请先配置并启用插件'})
+        else:
+            try:
+                rows = self._engine.store.history(limit=8)
+                elements.extend(history_section(rows, self.__class__.__name__,
+                                                title='最近上传', empty='暂无上传记录'))
+            except Exception:
+                elements.append({'component': 'div', 'props': {'class': 'text-medium-emphasis pa-2'},
+                                 'text': '历史读取失败，请稍后刷新'})
+        return (
+            {'cols': 12, 'md': 6},
+            {'title': '上传历史', 'subtitle': self.plugin_name, 'border': True},
+            elements,
+        )
 
     def api_confirmation(self, payload: ActionRequest) -> Response[ActionResult]:
         """Display a second explicit restart button; this request never starts work."""

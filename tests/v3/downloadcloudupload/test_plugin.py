@@ -113,9 +113,9 @@ class FakeGateway:
     def folder(self, storage, target, root):
         return storage, target
 
-    def upload(self, folder, path, name, progress=None):
+    def upload(self, folder, path, name, progress=None, speed_limit_bps=0):
         storage, parent = folder
-        self.uploads.append((folder, name))
+        self.uploads.append((folder, name, speed_limit_bps))
         if self.upload_error:
             raise core.UploadError('UPLOAD_RESULT_UNKNOWN')
         size = path.stat().st_size
@@ -430,9 +430,9 @@ class QueueTest(unittest.TestCase):
         self.engine.process(budget=100)  # stabilise signatures
         original = self.gateway.upload
         states = []
-        def upload(folder, path, name, progress=None):
+        def upload(folder, path, name, progress=None, **kwargs):
             states.append({row['name']: row['state'] for row in self.files()})
-            return original(folder, path, name, progress)
+            return original(folder, path, name, progress=progress, **kwargs)
         self.gateway.upload = upload
         self.engine.process(budget=100)
         # While E02 was uploading, E01 was already confirmed rather than waiting for the batch.
@@ -538,10 +538,10 @@ class QueueTest(unittest.TestCase):
         self.gateway.lag = True
         self.enqueue()
         original = self.gateway.upload
-        def upload(folder, path, name, progress=None):
+        def upload(folder, path, name, progress=None, **kwargs):
             progress(2)
             progress(path.stat().st_size - 2)
-            return original(folder, path, name)
+            return original(folder, path, name, progress=progress, **kwargs)
         self.gateway.upload = upload
         self.engine.process()
         self.engine.process()
@@ -1340,12 +1340,133 @@ class BoundaryTest(unittest.TestCase):
             form, defaults = instance.get_form()
         self.assertEqual(defaults['downloaders'], [])
         self.assertIn('rules', defaults)
+        self.assertEqual(defaults['upload_speed_limit'], 0)
+        self.assertEqual(instance.plugin_icon, 'cloud.png')
+        self.assertTrue((ROOT / 'icons' / 'cloud.png').is_file())
+        self.assertEqual((ROOT / 'icons' / 'cloud.png').read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
         json.dumps(form, ensure_ascii=False)
         routes = instance.get_api()
         self.assertTrue(all(route['auth'] == 'bear' and route.get('response_model') for route in routes))
         self.assertTrue(all(route['dependencies'] for route in routes))
+        self.assertTrue(any(route['path'] == '/history' for route in routes))
         metadata = json.loads((ROOT / 'package.v3.json').read_text(encoding='utf-8'))
         self.assertEqual(metadata['DownloadCloudUpload']['version'], instance.plugin_version)
+        self.assertEqual(metadata['DownloadCloudUpload']['icon'], 'cloud.png')
+        self.assertEqual(instance.plugin_version, '0.4.0')
+
+
+class SpeedLimitAndHistoryTest(unittest.TestCase):
+    """Cover upload throttling config wiring and durable history browsing."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.local = self.root / 'downloads'
+        self.local.mkdir()
+        self.gateway = FakeGateway()
+        self.store = core.Store(self.root / 'queue.sqlite')
+        self.rules = core.validate_rules([{'name': '视频', 'source': '/data', 'local': str(self.local),
+                                         'storage': '115网盘Plus', 'target': '/影视', 'instance': '', 'enabled': True}])
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def _enqueue(self, engine, name='剧/第01集.mkv', payload=b'video-data'):
+        engine.scan()  # establish empty baseline before the completed task appears
+        path = self.local.joinpath(*Path(name).parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        task = core.Torrent('qb', 'hash', '某剧', '/data', True, 1000)
+        self.gateway.snapshots['qb'] = [task]
+        self.gateway.members[('qb', 'hash')] = [core.TorrentFile(name, len(payload), True, True)]
+        engine.scan()
+        with self.store.connect() as db:
+            db.execute('UPDATE files SET next_at=0, stable_at=0')
+        return path
+
+    def test_speed_limit_zero_means_unlimited_and_value_reaches_upload(self):
+        engine = core.Engine(self.store, self.gateway, self.rules, ['qb'],
+                             stable_seconds=0, upload_speed_limit=256)
+        self._enqueue(engine)
+        for _ in range(3):
+            engine.process(budget=100)
+        self.assertEqual(self.gateway.uploads[-1][2], 256 * 1024)
+        unlimited = core.Engine(self.store, FakeGateway(), self.rules, ['qb'],
+                                stable_seconds=0, upload_speed_limit=0)
+        self.assertEqual(unlimited.upload_speed_limit, 0)
+
+    def test_config_persists_speed_limit_and_rejects_out_of_range(self):
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root / 'plugin'
+        with patch.object(plugin, 'MPGateway') as factory:
+            factory.return_value.services.return_value = {'qb': SimpleNamespace(type='qbittorrent')}
+            instance.init_plugin({
+                'enabled': True, 'downloaders': ['qb'], 'upload_speed_limit': 512,
+                'rules': [{'name': '视频', 'source': '/data', 'local': str(self.local),
+                           'storage': '115', 'target': '/影视', 'instance': '', 'enabled': True}],
+            })
+        self.assertTrue(instance.get_state())
+        self.assertEqual(instance.saved_config['upload_speed_limit'], 512)
+        self.assertEqual(instance._engine.upload_speed_limit, 512)
+        with patch.object(plugin, 'MPGateway'):
+            instance.init_plugin({'enabled': False, 'upload_speed_limit': -1})
+        self.assertIn('上传速度限制', instance._error)
+
+    def test_throttle_progress_sleeps_for_positive_limit_only(self):
+        calls = []
+        def progress(increment):
+            calls.append(increment)
+        wrapped = cloud_module.throttle_progress(progress, 0)
+        self.assertIs(wrapped, progress)
+        limited = cloud_module.throttle_progress(progress, 1024)
+        started = time.monotonic()
+        limited(2048)
+        self.assertGreaterEqual(time.monotonic() - started, 1.5)
+        self.assertEqual(calls, [2048])
+
+    def test_history_records_success_prunes_and_redacts_cookies(self):
+        engine = core.Engine(self.store, self.gateway, self.rules, ['qb'], stable_seconds=0)
+        self._enqueue(engine)
+        for _ in range(3):
+            engine.process(budget=100)
+        rows = self.store.history(limit=10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['state'], 'success')
+        self.assertEqual(rows[0]['source_name'], '第01集.mkv')
+        self.assertEqual(rows[0]['target'], '/影视/剧/第01集.mkv')
+        self.store.record_history(99, '标题', r'folder\secret.mkv', '/影视/x.mkv', 12, 'failed',
+                                  'UID=123_A; CID=private; SEID=secret')
+        redacted = self.store.history(limit=1)[0]
+        self.assertEqual(redacted['source_name'], 'secret.mkv')
+        self.assertEqual(redacted['message'], 'REDACTED')
+        for index in range(core.Store.HISTORY_LIMIT + 20):
+            self.store.record_history(index, f't{index}', f'f{index}.mkv', f'/t/{index}', 1, 'success', 'ok')
+        self.assertLessEqual(self.store.history_count(), core.Store.HISTORY_LIMIT)
+
+    def test_page_and_dashboard_expose_history(self):
+        engine = core.Engine(self.store, self.gateway, self.rules, ['qb'], stable_seconds=0)
+        self._enqueue(engine)
+        for _ in range(3):
+            engine.process(budget=100)
+        instance = plugin.DownloadCloudUpload()
+        instance.test_data_path = self.root / 'plugin'
+        instance._engine = engine
+        instance._enabled = True
+        page = instance.get_page()
+        rendered = json.dumps(page, ensure_ascii=False)
+        self.assertIn('近期上传记录', rendered)
+        self.assertIn('第01集.mkv', rendered)
+        self.assertIn('上传成功', rendered)
+        meta = instance.get_dashboard_meta()
+        self.assertEqual(meta[0]['key'], 'upload_history')
+        cols, attrs, elements = instance.get_dashboard(key='upload_history')
+        self.assertEqual(attrs['title'], '上传历史')
+        self.assertIn('最近上传', json.dumps(elements, ensure_ascii=False))
+        response = instance.api_history(plugin.HistoryRequest(limit=10, offset=0))
+        self.assertTrue(response.success)
+        self.assertGreaterEqual(response.data.total, 1)
+        self.assertEqual(response.data.items[0].status, '上传成功')
+        self.assertEqual(response.data.items[0].title, '某剧')
 
 
 class OrganizerTest(unittest.TestCase):
