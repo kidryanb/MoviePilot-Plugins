@@ -21,6 +21,13 @@ from ...utils.strm import StrmGenerator
 
 
 _RELAY_CHUNK_SIZE = 4 * 1024 * 1024
+
+
+class _ProxyHTTPServer(ThreadingHTTPServer):
+    """播放代理监听：请求线程为守护线程，关闭监听时不等正在播放的中转流结束。"""
+
+    daemon_threads = True
+    block_on_close = False
 _CONTENT_RANGE = re.compile(r"bytes (\d+)-(\d+)/(\d+)")
 
 
@@ -432,7 +439,7 @@ class StrmProxyServer:
                 return self._httpd is not None
             handler = self._make_handler()
             try:
-                self._httpd = ThreadingHTTPServer((self._host, self._port), handler)
+                self._httpd = _ProxyHTTPServer((self._host, self._port), handler)
             except OSError as error:
                 StrmProxyServer.last_error = str(error)
                 logger.error(f"STRM 播放代理监听启动失败（{self._host}:{self._port}）：{error}")
