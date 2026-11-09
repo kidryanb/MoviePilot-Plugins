@@ -6,7 +6,7 @@ import {fileURLToPath} from "node:url";
 
 const outputDir = resolve(
     fileURLToPath(new URL(".", import.meta.url)),
-    "../../plugins.v3/cloudsubscribe/dist/assets",
+    "../../plugins.v3/cloudsubscribefork/dist/assets",
 );
 
 export default defineConfig({
@@ -14,7 +14,7 @@ export default defineConfig({
     plugins: [
         vue(),
         federation({
-            name: "cloudsubscribe",
+            name: "cloudsubscribefork",
             filename: "remoteEntry.js",
             exposes: {
                 "./Page": "./src/components/Page.vue",
