@@ -274,11 +274,11 @@ MoviePilot 的订阅搜索由本插件接管，用已有多源（至少包括 Pa
 
 ### M3 夸克 STRM/302 对齐 115 的使用体验
 
-- [ ] 115 命中时不调用 `_generate_strm`，媒体库 STRM 只由 P115StrmHelper 生成
-- [ ] 夸克 STRM 使用 `file_id`，不使用默认的 `{pickcode}` 模板
-- [ ] `StrmProxyApi` 对夸克短链做 302 或带 Cookie 的分段中转，范围请求能拖动进度
-- [ ] `media_server_refresh_enabled` 打开时，`MediaServerNotifier._refresh_service` 能刷新到夸克 STRM 所在目录（检查 `media_server_path_mappings`）
-- [ ] 115 转存完成后的媒体库刷新不依赖本插件再写一份 STRM；若 P115StrmHelper 自己会刷新，避免两边各刷一次造成重复通知
+- [x] 115 命中时不调用 `_generate_strm`，媒体库 STRM 只由 P115StrmHelper 生成（P115StrmHelper 已启用时；0.2.4）
+- [x] 夸克 STRM 使用 `file_id`，不使用默认的 `{pickcode}` 模板（`StrmGenerator.drive_template`；默认盘以外的网盘用 `/d/<网盘>/<标识>` 短链，需开启播放代理）
+- [x] `StrmProxyApi` 按短链里的网盘前缀取链，夸克走带 Cookie 的分段中转，范围请求能拖动进度
+- [x] `media_server_refresh_enabled` 打开时，`MediaServerNotifier._refresh_service` 能刷新到夸克 STRM 所在目录（夸克 STRM 生成后按其本地路径通知；路径映射仍由 `media_server_path_mappings` 配置）
+- [x] 115 转存完成后的媒体库刷新不依赖本插件再写一份 STRM；P115StrmHelper 负责 115 时本插件跳过兜底刷新（`_strm_by_helper`）
 
 验收：
 
