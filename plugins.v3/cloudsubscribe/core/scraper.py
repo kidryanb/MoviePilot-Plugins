@@ -3,13 +3,13 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Callable, Dict, Iterable, Optional
 
-from app.core.config import settings
-from app.core.metainfo import MetaInfoPath
-from app.log import logger
+from app.sdk.config import settings
+from app.sdk.media import MetaInfoPath
+from app.sdk.logging import logger
 from app.modules.themoviedb.scraper import TmdbScraper
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
-from app.utils.http import RequestUtils
+from app.sdk.network import RequestUtils
 
 
 class MediaScraper:

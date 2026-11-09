@@ -4,9 +4,9 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo, TorrentInfo
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from ...core import OwnerDelegator
 from ...search.matching import positive_ints

@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 标为 0.0.1-fork，仅作引入起点，未改功能。
+# 本仓库 plugin_version 0.1.0：适配 MP V3 SDK，并加入与 DownloadCloudUpload 的共存规则（core/coexist.py）。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -14,10 +14,10 @@ from typing import Optional, Any, List, Dict, Tuple, Callable
 
 import pytz
 from app.api.endpoints.plugin import register_plugin_api
-from app.core.config import settings
-from app.core.event import Event, eventmanager
-from app.log import logger
-from app.plugins import _PluginBase
+from app.sdk.config import settings
+from app.sdk.events import Event, eventmanager
+from app.sdk.logging import logger
+from app.sdk.plugin import _PluginBase
 from app.schemas.types import ChainEventType, EventType, NotificationType
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -52,6 +52,13 @@ from .core.services import (
     SubscriptionScoringService,
     SyncExecutionService,
     SyncRuntimeService,
+)
+from .core.coexist import (
+    COEXIST_DEFAULTS,
+    COOKIE_SOURCE_KEY,
+    enforce_forced_values,
+    normalize_cookie_source,
+    resolve_115_cookie,
 )
 from .core.storage import CloudSubscribeDataStore
 from .core.subscribe import AutoSubscribeService
@@ -113,7 +120,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.0.1-fork"
+    plugin_version = "0.1.0"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -153,7 +160,7 @@ class CloudSubscribe(_PluginBase):
     _magnet_metadata_url_template: str = "https://itorrents.org/torrent/{info_hash}.torrent"
 
     # 订阅过滤模式："exclude" 排除模式（处理除勾选外的全部订阅）/ "include" 指定模式（仅处理勾选的订阅）
-    _subscribe_filter_mode: str = "exclude"
+    _subscribe_filter_mode: str = "include"
     _exclude_subscribes: List[int] = []
     _include_subscribes: List[int] = []
     # 搜索源优先级（按列表顺序），为空时使用已启用来源的默认顺序
@@ -176,7 +183,10 @@ class CloudSubscribe(_PluginBase):
     # 是否屏蔽系统订阅（True=已屏蔽系统订阅，False=已恢复系统订阅）
     _block_system_subscribe: bool = False
     _takeover_new_subscribes: bool = False
-    _platform_download_policy: str = "block"
+    _platform_download_policy: str = "allow"
+    _cookies: str = ""
+    _p115_cookie_source: str = "strm_helper"
+    _coexist_notes: List[str] = []
 
     _transfer_task_batch_size: int = 50
     _cross_transfer_enabled: bool = False
@@ -473,6 +483,11 @@ class CloudSubscribe(_PluginBase):
                 *legacy_download_keys, "unblock_start_time", "unblock_end_time"
         ):
             config.pop(deprecated_key, None)
+        # 与 DownloadCloudUpload 共存：补齐新装默认值，并锁定会重复上传的开关。
+        for key, value in COEXIST_DEFAULTS.items():
+            config.setdefault(key, value)
+        for key in enforce_forced_values(config):
+            logger.warning(f"共存模式不允许开启 {key}，已自动关闭；下载器任务的上传由「下载完成自动上传」负责")
         if "platform_download_policy" in config:
             policy = str(config.get("platform_download_policy") or "block").strip().lower()
             if policy not in {"allow", "block", "cloud"}:
@@ -529,7 +544,7 @@ class CloudSubscribe(_PluginBase):
                 self._apply_notification_config(config)
                 self._get_component(MessageRoutingHook).install()
                 self._applied_config = copy.deepcopy(config)
-                from app.core.plugin import PluginManager
+                from app.sdk.plugin import PluginManager
                 PluginManager().clear_plugin_agent_tools_cache()
                 logger.info("基础开关或扩展名/通知配置已热更新，网盘与搜索客户端保持运行")
                 return
@@ -580,6 +595,7 @@ class CloudSubscribe(_PluginBase):
         if config:
             for key, val in config.items():
                 setattr(self, f"_{key}", val)
+            self._apply_coexist_config(config)
             self._apply_base_config(config)
             self._apply_notification_config(config)
             self._cloud_drive_key = str(config.get("cloud_drive", "115") or "115").strip().lower()
@@ -623,7 +639,7 @@ class CloudSubscribe(_PluginBase):
         action = "插件初始化" if reset_runtime else "插件配置已应用"
         self._applied_config = copy.deepcopy(config)
         self._sync_strm_proxy_server()
-        from app.core.plugin import PluginManager
+        from app.sdk.plugin import PluginManager
         PluginManager().clear_plugin_agent_tools_cache()
         logger.info(
             f"{action}：接管时段={self._block_start_time}~{self._block_end_time}, "
@@ -649,6 +665,13 @@ class CloudSubscribe(_PluginBase):
             self._persist_config_values(auto_subscribe_onlyonce=False)
             if self._scheduler.get_jobs():
                 self._scheduler.start()
+
+    def _apply_coexist_config(self, config: Dict[str, Any]) -> None:
+        """按共存规则决定 115 Cookie，并记录需要提示用户的原因。"""
+        self._p115_cookie_source = normalize_cookie_source(config.get(COOKIE_SOURCE_KEY))
+        self._cookies, self._coexist_notes = resolve_115_cookie(config)
+        for note in self._coexist_notes:
+            logger.warning(note)
 
     def _apply_notification_config(self, config: Dict[str, Any]) -> None:
         self._notify = bool(config.get("notify", False))
@@ -719,7 +742,7 @@ class CloudSubscribe(_PluginBase):
         self._auto_subscribe_onlyonce = bool(config.get("auto_subscribe_onlyonce", False))
         self._auto_subscribe_cron = str(config.get("auto_subscribe_cron", "0 8 * * *") or "0 8 * * *").strip()
 
-        self._subscribe_filter_mode = config.get("subscribe_filter_mode", "exclude") or "exclude"
+        self._subscribe_filter_mode = config.get("subscribe_filter_mode", "include") or "include"
         self._exclude_subscribes = config.get("exclude_subscribes", []) or []
         self._include_subscribes = config.get("include_subscribes", []) or []
         if self._subscribe_filter_mode == "include":
@@ -846,7 +869,7 @@ class CloudSubscribe(_PluginBase):
         self._subtitle_traditional_to_simplified = bool(config.get("subtitle_traditional_to_simplified", False))
         self._anime_pack_preferred = bool(config.get("anime_pack_preferred", True))
         self._offline_timeout = max(10, min(int(config.get("offline_timeout", 30) or 30), 1440))
-        self._strm_generate_enabled = bool(config.get("strm_generate_enabled", True))
+        self._strm_generate_enabled = bool(config.get("strm_generate_enabled", False))
         self._nfo_scrape_enabled = bool(config.get("nfo_scrape_enabled", False))
         self._image_scrape_enabled = bool(config.get("image_scrape_enabled", False))
         self._strm_base_url = str(config.get("strm_base_url", "http://172.17.0.1:9527")).strip().rstrip("/")
@@ -869,7 +892,7 @@ class CloudSubscribe(_PluginBase):
         self._block_end_time = str(config.get("block_end_time", self._block_end_time) or self._block_end_time)
         self._block_system_subscribe = bool(config.get("block_system_subscribe", False))
         self._takeover_new_subscribes = bool(config.get("takeover_new_subscribes", False))
-        self._platform_download_policy = str(config.get("platform_download_policy", "block") or "block")
+        self._platform_download_policy = str(config.get("platform_download_policy", "allow") or "allow")
 
     def _p115_timeout_kwargs(self) -> Dict[str, Any]:
         """组装 p115client 的普通与慢操作超时参数，0 表示不限制。"""

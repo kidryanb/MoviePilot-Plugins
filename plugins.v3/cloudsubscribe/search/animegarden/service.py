@@ -3,7 +3,7 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import AnimeGardenClient, AnimeGardenClientError
 from ..magnet import media_titles, normalize_magnets

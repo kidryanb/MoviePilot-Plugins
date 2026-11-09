@@ -7,7 +7,7 @@ import re
 from threading import RLock
 from urllib.parse import parse_qs, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..common import iter_transfer_batches, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus

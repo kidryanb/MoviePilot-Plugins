@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import P123_AVAILABLE, check_response
 from .files import P123FileService

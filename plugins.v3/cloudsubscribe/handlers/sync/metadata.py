@@ -6,10 +6,10 @@ import re
 from concurrent.futures import Future
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.core.context import MediaInfo
-from app.core.metainfo import MetaInfo
+from app.sdk.media import MediaInfo
+from app.sdk.media import MetaInfo
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from .utils import normalize_season

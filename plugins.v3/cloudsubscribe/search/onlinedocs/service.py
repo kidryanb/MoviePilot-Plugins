@@ -3,7 +3,7 @@
 import re
 from typing import Any, Dict, Iterable, List
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import OnlineDocsClient, is_online_document_url
 from ..magnet import clear_cache

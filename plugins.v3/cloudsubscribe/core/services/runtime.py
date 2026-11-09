@@ -7,8 +7,8 @@ from threading import Event as ThreadEvent, Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
-from app.core.config import global_vars, settings
-from app.log import logger
+from app.sdk.config import global_vars, settings
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger

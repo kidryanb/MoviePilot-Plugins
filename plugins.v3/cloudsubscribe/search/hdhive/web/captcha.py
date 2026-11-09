@@ -21,7 +21,7 @@ except ImportError:
     ImageFilter = None
     ImageSequence = None
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .action import ServerActionProtocol, ServerActionResponse
 from .parser import decode_embedded_text, response_body, response_text

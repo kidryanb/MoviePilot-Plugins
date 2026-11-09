@@ -10,14 +10,29 @@
 | 上游提交 | `876462067593d4fc2f7bc038f2f73d3eaf099b76`（2026-11-05，说明为「更新版本v1.7.7」） |
 | 上游版本 | `package.v2.json` 与当时的 `plugin_version` 都是 `1.7.7` |
 | 许可 | GPL-3.0-only。插件目录与 `frontend/cloudsubscribe/LICENSE` 各有一份全文 |
-| 本仓库版本 | `0.0.1-fork`（`package.v3.json` 与 `plugin_version`） |
+| 本仓库版本 | `0.1.0`（`package.v3.json` 与 `plugin_version`）；引入起点为 `0.0.1-fork` |
 | 插件代码 | `plugins.v3/cloudsubscribe/` |
 | 前端源码 | `frontend/cloudsubscribe/` |
 | 上游使用说明副本 | `docs/cloudsubscribe.md` |
 
-这一轮只引入代码并写清单。除版本号和来源说明外，没有改转存、搜索或订阅逻辑。`DownloadCloudUpload` 的代码和 `package.v3.json` 条目未改。两份 `icons/cloud.png` 哈希相同，清单继续引用仓库里已有的 `cloud.png`，没有覆盖图标文件。
+引入那一轮（`0.0.1-fork`）只引入代码并写清单。`0.1.0` 完成 M0 的 SDK 对齐和共存规则，转存、搜索、订阅的业务逻辑仍与上游一致。`DownloadCloudUpload` 的代码和 `package.v3.json` 条目始终未改。两份 `icons/cloud.png` 哈希相同，清单继续引用仓库里已有的 `cloud.png`。
 
-入口类仍是 `CloudSubscribe`，继承 `app.plugins._PluginBase`（`plugins.v3/cloudsubscribe/__init__.py`）。本仓库已有插件用的是 `app.sdk.plugin._PluginBase`。目录放在 `plugins.v3/` 只为了让 V3 插件市场读到 `package.v3.json`，并不表示已经完成 SDK 迁移。
+入口类仍是 `CloudSubscribe`，`0.1.0` 起继承 `app.sdk.plugin._PluginBase`（`plugins.v3/cloudsubscribe/__init__.py`），与本仓库 DownloadCloudUpload 一致。
+
+## 与 DownloadCloudUpload 共存
+
+本仓库原有的「下载完成自动上传」(DownloadCloudUpload) 和本插件会装在同一个 MoviePilot 里。分工固定为：**下载器任务上传 115 归 DownloadCloudUpload，本插件只做网盘分享转存**。后面每一期都不能打破下面几条，规则集中在 `plugins.v3/cloudsubscribe/core/coexist.py`。
+
+| # | 重叠点（上游代码） | 规则 | 状态 |
+| --- | --- | --- | --- |
+| 1 | `enable_pt_upgrade`：MP 整理完成（`TransferComplete`）后，`PtUpgradeService.process_pt_upgrade` 把本地文件算 SHA1 上传到网盘，与 DownloadCloudUpload 做的是同一件事 | 固定关闭：`enforce_forced_values` 在应用配置时改回 `false` 并持久化；前端开关置灰并说明原因 | 0.1.0 已做 |
+| 2 | `platform_download_policy` 上游默认 `block`；接管时段内 `_is_platform_search_blocked` 会全局拦截平台搜索，不区分订阅，下载器就收不到任务 | 新装默认 `subscribe_filter_mode=include`（列表为空即不接管任何订阅）、`platform_download_policy=allow`；`include` 模式下不做全局平台搜索拦截 | 0.1.0 已做 |
+| 3 | 本插件自己扫码登录 115。扫码选的客户端类型和 P115StrmHelper 相同时，115 会踢掉旧会话，DownloadCloudUpload 复用的 Cookie 随之失效 | 新增 `p115_cookie_source`，默认 `strm_helper`：只读复用 P115StrmHelper 的 `cookies`（与 DownloadCloudUpload 的 `strm_cookie` 读法一致，不回写）；此模式下 115 扫码接口直接拒绝。选 `own` 才用本插件的 `cookies` 与扫码，界面提示要选不同客户端类型 | 0.1.0 已做 |
+| 4 | `p115_transfer_path` 与 DownloadCloudUpload 规则的 `target` 重合时，转存进来的文件会被它的「核对已存在文件」误判为冲突 | 读取 DownloadCloudUpload 已启用规则的 `target`；转存目录相等、在其内部或包含它（`/` 除外）时，本次运行不注册 115 并在日志说明 | 0.1.0 已做 |
+| 5 | 上游默认 `strm_generate_enabled=true`，会在 115 侧再写一套 STRM | 默认关闭；115 的 STRM 继续由 P115StrmHelper 负责（M3 再做按盘跳过） | 0.1.0 已做（默认值） |
+| 6 | 回归 | 每期验收都要求：DownloadCloudUpload 的测试全部通过；启用、停用本插件前后，它的队列、MP 自动整理接管和 STRM 监控目录不变；停用本插件后订阅钩子完全恢复 | 每期执行 |
+
+已知限制：P115StrmHelper 的 Cookie 在本插件应用配置时读取，对方换了 Cookie 后，需要在本插件保存一次配置（或重启）才会用上新值。
 
 ## 和预期不一致的地方（以代码为准）
 
@@ -189,19 +204,26 @@ MoviePilot 的订阅搜索由本插件接管，用已有多源（至少包括 Pa
 
 - [x] 源码在 `plugins.v3/cloudsubscribe`，前端在 `frontend/cloudsubscribe`，`package.v3.json` 登记为 `0.0.1-fork`
 - [x] 保留 GPL-3.0 全文，并在 README / `__init__.py` 写明上游仓库与提交
-- [ ] 入口改为 `app.sdk.plugin._PluginBase`，MP V3 能安装并启用，不在导入 `app.plugins` 时失败
-- [ ] 115：`cookies` 加扫码（`P115ClientManager`，`CloudDriveManager.get_qrcode_service("115")`）
-- [ ] 夸克：`quark_cookie` 加扫码（`QuarkClient`，`get_qrcode_service("quark")`）
-- [ ] 空 `cookies` 不再把 115 当成已就绪
-- [ ] 决定 V3 设置页用现有前端还是最小页面；若用现有前端，补上构建产物的存放方式（本仓库忽略 `dist/`）
+- [x] 入口改为 `app.sdk.plugin._PluginBase`；日志、配置、事件、缓存、媒体、网络等改为 `app.sdk.*`。按 MoviePilot `v3` 分支源码静态核对过，全部 `app.*` 导入都能解析（无 SDK 入口的 `app.db.*_oper` 等仍走宿主兼容层）
+- [x] 依赖清单改为 `pyproject.toml`
+- [x] 115 扫码：上游已有（`P115ClientManager`）。共存模式默认复用 P115StrmHelper，只有 `p115_cookie_source=own` 时开放扫码
+- [x] 夸克扫码：上游已有（`QuarkClient`，`quark_cookie`），未改
+- [x] 空 `cookies` 不再把 115 当成已就绪：`P115DriverDefinition.create_client` 返回 `None`，扫码走临时服务
+- [x] 设置页沿用现有 Vue 前端；构建输出改到 `plugins.v3/cloudsubscribe/dist/assets` 并随源码提交（`.gitignore` 单独放行）
+- [x] 共存规则 1–5（见「与 DownloadCloudUpload 共存」）
+- [ ] 在真实 MP V3 宿主里安装、启用、停用、重载各一次，确认日志无导入错误、`DEBUG=true` 下旧导入提示只剩无 SDK 入口的几项
+- [ ] 联邦组件 CSS 是否污染主程序（V3 开发指南 8.3），在真实页面检查
 
 验收：
 
-- 插件市场能看到「网盘订阅助手」`0.0.1-fork`，`package.v3.json` 可被解析
+- 插件市场能看到「网盘订阅助手」`0.1.0`，`package.v3.json` 可被解析
 - 在 MP V3 安装后启用，日志没有导入错误，停用再启用也不残留调度器钩子
 - 只填 115 或只填夸克，账号信息能显示对应那一个
 - 两个都填时，registry 里同时有 `115` 和 `quark`，凭证不会写串
 - 此阶段可以仍使用单一 `cloud_drive`，不要求同盘仲裁已经生效
+- 新装启用后不勾选任何订阅：MP 订阅、下载器和「下载完成自动上传」的行为与安装前完全一样
+- PT 洗版开关无法打开；复用 P115StrmHelper 时 115 扫码被拒绝；115 转存目录与上传目录重叠时日志提示且不转存
+- DownloadCloudUpload 的测试全部通过
 
 ### M1 `same_cloud_first` 仲裁，并和订阅接管联调
 
@@ -210,7 +232,7 @@ MoviePilot 的订阅搜索由本插件接管，用已有多源（至少包括 Pa
 - [ ] 订阅搜索不再按单一 `_cloud_drive_key` 裁剪 PanSou 的 `cloud_types`
 - [ ] 115 分享转到 115 的 `p115_transfer_path`，夸克分享转到夸克的 `quark_transfer_path`
 - [ ] 只登录一个盘时，另一种分享不写入未登录的盘
-- [ ] `takeover_new_subscribes` 或 `block_system_subscribe` 打开时，新订阅进入 `queue_subscribe_search`，而不是平台下载器
+- [ ] `takeover_new_subscribes` 或 `block_system_subscribe` 打开时，新订阅进入 `queue_subscribe_search`，而不是平台下载器（只对勾选的订阅生效，见共存规则 2）
 - [ ] `platform_download_policy=block` 时，接管期内 `SearchChain` 搜索被拦住；`cloud` 时平台磁力能转成网盘离线（仅当目标盘有 `OFFLINE_DOWNLOAD`）
 
 验收：

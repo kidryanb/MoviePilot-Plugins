@@ -5,8 +5,8 @@ import json
 import time
 from typing import Any, Dict, Optional
 
-from app.core.config import global_vars, settings
-from app.log import logger
+from app.sdk.config import global_vars, settings
+from app.sdk.logging import logger
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 

@@ -2,7 +2,7 @@
 from time import sleep
 from urllib.parse import urlsplit, urlunsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ...utils.http_client import normalize_proxies, requests
 

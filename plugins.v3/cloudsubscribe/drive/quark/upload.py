@@ -14,7 +14,7 @@ from wsgiref.handlers import format_date_time
 from xml.sax.saxutils import escape
 
 import requests
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import QuarkFileService
 

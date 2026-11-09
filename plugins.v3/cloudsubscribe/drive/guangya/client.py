@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, Optional
 
 import requests
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..common import DriveRateLimiter, format_size, safe_int
 

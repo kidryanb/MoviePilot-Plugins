@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ...utils.http_client import (
     RequestGate,

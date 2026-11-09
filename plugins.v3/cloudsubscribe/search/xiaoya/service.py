@@ -5,7 +5,7 @@ from __future__ import annotations
 from itertools import zip_longest
 from typing import Any, Dict, Iterable, List, Mapping
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .preview import XiaoyaPreviewResolver
 from .resource import XiaoyaResourceService

@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from urllib.parse import unquote, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .utils import extract_ed2k_filename
 from ...core import (

@@ -5,7 +5,7 @@ from typing import Optional, Type
 
 from app.agent.tools.base import MoviePilotTool
 from app.agent.tools.tags import ToolTag
-from app.core.plugin import PluginManager
+from app.sdk.plugin import PluginManager
 from pydantic import BaseModel
 
 from .schemas import (

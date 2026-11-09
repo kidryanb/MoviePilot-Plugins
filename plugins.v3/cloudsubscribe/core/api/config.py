@@ -3,7 +3,7 @@
 import json
 from typing import Any, Dict, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 from fastapi import Request
 
 from .account import clear_account_cache

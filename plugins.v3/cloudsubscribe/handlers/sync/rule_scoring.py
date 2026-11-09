@@ -5,10 +5,10 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from ...core import OwnerDelegator
 from ...core.media import apply_media_identity, tmdb_id_of

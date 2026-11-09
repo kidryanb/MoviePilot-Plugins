@@ -9,11 +9,11 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from app.core.context import MediaInfo
+from app.sdk.media import MediaInfo
 from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.models.downloadhistory import DownloadHistory
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from .utils import normalize_season

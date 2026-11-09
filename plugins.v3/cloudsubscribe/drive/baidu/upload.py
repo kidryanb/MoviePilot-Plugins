@@ -9,7 +9,7 @@ from hashlib import md5
 from pathlib import Path
 from typing import Any, List
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import BaiduFileService, join_path
 from ..common import safe_int

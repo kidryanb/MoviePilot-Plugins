@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import Dian115Client, Dian115Error
 from .security import resource_path, share_path

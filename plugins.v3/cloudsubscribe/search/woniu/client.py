@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
 
-from app.log import logger
+from app.sdk.logging import logger
 from bs4 import BeautifulSoup
 
 from ...utils.http_client import (

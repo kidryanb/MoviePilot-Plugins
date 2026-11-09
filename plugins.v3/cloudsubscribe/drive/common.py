@@ -16,9 +16,9 @@ try:
 except ImportError:  # pragma: no cover - requests is a platform dependency
     requests = None
 
-from app.core.cache import TTLCache
-from app.log import logger
-from app.utils.string import StringUtils
+from app.sdk.cache import TTLCache
+from app.sdk.logging import logger
+from app.sdk.utilities import StringUtils
 
 from ..core.cloud import CloudFile, DirectoryListing, DirectoryLookup
 from ..utils.cache import create_platform_ttl_cache

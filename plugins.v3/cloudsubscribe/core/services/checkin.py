@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 import pytz
-from app.core.config import settings
-from app.log import logger
+from app.sdk.config import settings
+from app.sdk.logging import logger
 
 from .. import OwnerDelegator
 from ..checkin_manager import get_checkin_definitions

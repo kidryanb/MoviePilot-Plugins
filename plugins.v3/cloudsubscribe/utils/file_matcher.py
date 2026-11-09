@@ -3,8 +3,8 @@
 import re
 from typing import Any, Dict, List
 
-from app.core.metainfo import MetaInfo
-from app.log import logger
+from app.sdk.media import MetaInfo
+from app.sdk.logging import logger
 
 from .file_parser import MediaFileParser
 from ..search.matching import normalize_title, title_matches

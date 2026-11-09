@@ -5,7 +5,7 @@ import threading
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import JuyingClient, JuyingError
 from ..matching import (

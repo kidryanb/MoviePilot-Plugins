@@ -8,7 +8,7 @@ from threading import RLock
 from typing import Any, Dict, Optional, Set
 from urllib.parse import unquote
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import is_success
 from ..common import safe_int

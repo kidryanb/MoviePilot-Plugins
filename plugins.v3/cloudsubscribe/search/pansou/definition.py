@@ -189,7 +189,7 @@ class PanSouSourceDefinition(SearchSourceDefinition):
             cls, config: Dict[str, Any], context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """按配置向 PanSou 服务探测健康度，返回当前可用的插件与频道列表。"""
-        from app.log import logger
+        from app.sdk.logging import logger
         from ..types import PANSOU_RESOURCE_TYPES, resource_type_name
         ctx = context or {}
         base_url = str(cls.config_value(config, "pansou_url", "") or "").strip()

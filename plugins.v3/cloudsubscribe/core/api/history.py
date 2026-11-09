@@ -3,8 +3,8 @@
 from threading import Thread
 from typing import Any, Dict, List
 
-from app.core.config import settings
-from app.log import logger
+from app.sdk.config import settings
+from app.sdk.logging import logger
 
 from .. import OwnerDelegator
 from ..services.runtime import sync_lock

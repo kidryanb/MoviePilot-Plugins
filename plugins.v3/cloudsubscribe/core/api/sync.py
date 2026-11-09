@@ -4,10 +4,10 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-from app.core.metainfo import MetaInfo
+from app.sdk.media import MetaInfo
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from .. import CloudDriveCapability, OwnerDelegator, SearchCapability

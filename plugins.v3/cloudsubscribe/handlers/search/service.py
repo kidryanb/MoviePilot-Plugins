@@ -11,7 +11,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple, Callable
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 

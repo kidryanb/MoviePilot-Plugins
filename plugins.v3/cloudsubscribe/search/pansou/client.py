@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..types import PANSOU_RESOURCE_TYPES, normalize_resource_type
 from ...utils.http_client import (

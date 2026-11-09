@@ -8,7 +8,7 @@ import time
 from collections import deque
 from typing import Any, Callable, Dict, List, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .action import ServerActionResponse
 from .client import HDHiveClient, HDHiveWebError

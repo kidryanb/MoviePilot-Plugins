@@ -2,10 +2,10 @@
 import copy
 from typing import Any, Dict, List, Optional, Set
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from .utils import candidate_progress, normalize_season
 from ...core import OwnerDelegator

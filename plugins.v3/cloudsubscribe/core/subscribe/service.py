@@ -13,9 +13,9 @@ from typing import Any, Optional
 from app.chain.download import DownloadChain
 from app.chain.media import MediaChain
 from app.chain.subscribe import SubscribeChain
-from app.core.metainfo import MetaInfo
+from app.sdk.media import MetaInfo
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType, NotificationType
 
 from .models import (

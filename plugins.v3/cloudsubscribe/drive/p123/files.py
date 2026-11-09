@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, List, Mapping, Optional
 
-from app.core.cache import TTLCache
-from app.log import logger
+from app.sdk.cache import TTLCache
+from app.sdk.logging import logger
 
 from .client import check_response, is_success
 from ..common import CloudDriveFileServiceBase, create_directory_cache, safe_int

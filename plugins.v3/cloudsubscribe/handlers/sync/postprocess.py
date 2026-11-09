@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.db import SessionFactory
 from app.db.models.subscribe import Subscribe
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from .utils import extract_ed2k_filename, normalize_season

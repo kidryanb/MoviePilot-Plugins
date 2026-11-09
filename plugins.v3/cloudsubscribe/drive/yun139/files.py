@@ -3,8 +3,8 @@
 import time
 from pathlib import PurePosixPath
 
-from app.core.cache import TTLCache
-from app.log import logger
+from app.sdk.cache import TTLCache
+from app.sdk.logging import logger
 
 from ..common import (
     CloudDriveFileServiceBase,

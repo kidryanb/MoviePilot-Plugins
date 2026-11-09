@@ -15,7 +15,7 @@ from threading import Event, Lock, Semaphore, Thread
 from typing import Callable, Optional
 
 import requests
-from app.log import logger
+from app.sdk.logging import logger
 from requests.adapters import HTTPAdapter
 
 from .cloud import (

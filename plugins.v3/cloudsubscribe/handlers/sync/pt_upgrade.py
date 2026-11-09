@@ -7,7 +7,7 @@ from threading import Event as ThreadEvent
 from typing import Any, Dict, Optional, Tuple
 
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from ...core import OwnerDelegator

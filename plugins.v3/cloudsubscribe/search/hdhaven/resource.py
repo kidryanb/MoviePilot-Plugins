@@ -6,8 +6,8 @@ from collections import deque
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
-from app.log import logger
-from app.utils.string import StringUtils
+from app.sdk.logging import logger
+from app.sdk.utilities import StringUtils
 
 from ...utils import MediaFileParser
 from ...utils.cache import create_platform_ttl_cache

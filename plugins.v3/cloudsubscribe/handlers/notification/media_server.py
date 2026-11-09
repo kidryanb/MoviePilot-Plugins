@@ -10,13 +10,13 @@ from typing import Any, Dict, List, Optional, Set
 from app.chain.mediaserver import MediaServerChain
 
 try:
-    from app.helper.mediaserver import MediaServerHelper
+    from app.sdk.services import MediaServerHelper
 except ImportError:
     from app.application.mediaserver import MediaServerHelper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo, RefreshMediaItem
 from app.schemas.types import MediaType
-from app.utils.http import RequestUtils
+from app.sdk.network import RequestUtils
 
 
 class MediaServerResolver:

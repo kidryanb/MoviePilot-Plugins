@@ -15,8 +15,8 @@ from urllib.parse import quote
 
 import requests
 from Crypto.Cipher import AES
-from app.log import logger
-from app.utils.string import StringUtils
+from app.sdk.logging import logger
+from app.sdk.utilities import StringUtils
 
 from ..common import DriveRateLimiter
 

@@ -9,8 +9,8 @@ from threading import RLock
 from typing import Callable, Generator, Optional
 
 from alembic.config import Config as AlembicConfig
-from app.core.config import settings
-from app.log import logger
+from app.sdk.config import settings
+from app.sdk.logging import logger
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker

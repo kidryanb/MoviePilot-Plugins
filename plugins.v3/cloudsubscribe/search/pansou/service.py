@@ -4,7 +4,7 @@ import re
 from typing import Any, Dict, List
 
 import unicodedata
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
 

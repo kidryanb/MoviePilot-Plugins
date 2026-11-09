@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urljoin
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .security import PiankuGate, PiankuGateError, PiankuVerificationError
 from ...utils.cache import cached_resource_call, create_platform_ttl_cache

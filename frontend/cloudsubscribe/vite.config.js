@@ -6,7 +6,7 @@ import {fileURLToPath} from "node:url";
 
 const outputDir = resolve(
     fileURLToPath(new URL(".", import.meta.url)),
-    "../../plugins.v2/cloudsubscribe/dist/assets",
+    "../../plugins.v3/cloudsubscribe/dist/assets",
 );
 
 export default defineConfig({

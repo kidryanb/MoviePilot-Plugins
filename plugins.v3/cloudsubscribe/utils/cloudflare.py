@@ -21,9 +21,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 from urllib.parse import quote, unquote, urlparse, urlsplit
 
-from app.core.config import settings
+from app.sdk.config import settings
 from app.helper.browser import PlaywrightHelper
-from app.log import logger
+from app.sdk.logging import logger
 from curl_cffi import requests
 
 try:

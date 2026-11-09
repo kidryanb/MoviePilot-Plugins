@@ -12,8 +12,8 @@ from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_co
 from pathlib import Path, PurePosixPath
 from typing import List, Dict, Any, Set, Optional, Callable, Tuple, Mapping, Iterable
 
-from app.core.config import global_vars
-from app.core.context import MediaInfo
+from app.sdk.config import global_vars
+from app.sdk.media import MediaInfo
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 
@@ -25,11 +25,11 @@ except Exception:
     except Exception:
         DirectoryHelper = None
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType, NotificationType
 
 try:
-    from app.utils.http import RequestUtils
+    from app.sdk.network import RequestUtils
 except Exception:
     try:
         from app.adapters.network.http import RequestUtils
@@ -373,7 +373,7 @@ class SyncHandler:
                 self._cloud_drive.key, self._CLOUD_MEDIA_ROOT
             )
 
-        self._strm_generate_enabled = bool(_get_val("strm_generate_enabled", True))
+        self._strm_generate_enabled = bool(_get_val("strm_generate_enabled", False))
         self._nfo_scrape_enabled = bool(_get_val("nfo_scrape_enabled", False))
         self._image_scrape_enabled = bool(_get_val("image_scrape_enabled", False))
         self._platform_transfer_history_enabled = bool(

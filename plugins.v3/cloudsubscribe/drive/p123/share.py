@@ -6,7 +6,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping
 from urllib.parse import parse_qs, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import is_success
 from .files import cloud_file

@@ -5,7 +5,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urljoin
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .security import HDHavenTurnstile
 from ...utils.cloudflare import is_cloudflare_challenge

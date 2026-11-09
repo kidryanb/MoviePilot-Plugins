@@ -6,7 +6,7 @@ from threading import Lock, Thread
 from typing import Any, Callable, Dict, Optional
 
 from app.chain.message import MessageChain
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..delegation import OwnerDelegator
 from ...search.types import resource_type_from_url

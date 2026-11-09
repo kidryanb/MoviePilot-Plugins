@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import urlencode
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from .client import Dian115Client, Dian115Error

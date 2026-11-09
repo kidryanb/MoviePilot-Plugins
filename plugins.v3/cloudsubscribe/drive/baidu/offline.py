@@ -8,7 +8,7 @@ from threading import RLock
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..common import safe_int
 from ...utils.magnet import extract_magnet_hash, parse_magnet_metadata

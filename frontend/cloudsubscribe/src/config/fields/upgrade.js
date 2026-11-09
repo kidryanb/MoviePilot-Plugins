@@ -18,9 +18,10 @@ export function createUpgradeSection(options) {
           },
           {
             key: "enable_pt_upgrade",
-            label: "启用 PT 洗版",
+            label: "启用 PT 洗版（已停用）",
             type: "switch",
-            hint: "完成 PT 下载和本地整理后，将符合洗版范围及评分条件的文件上传到当前网盘。",
+            hint: "本 fork 中下载器任务的上传统一交给「下载完成自动上传」，此功能固定关闭，避免重复上传。",
+            disabled: () => true,
             cols: 4,
           },
           {

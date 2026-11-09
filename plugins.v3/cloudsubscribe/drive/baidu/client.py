@@ -11,7 +11,7 @@ from threading import RLock
 from typing import Any, Dict, Mapping, Optional
 
 import requests
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..common import DriveRateLimiter, format_size, safe_int
 

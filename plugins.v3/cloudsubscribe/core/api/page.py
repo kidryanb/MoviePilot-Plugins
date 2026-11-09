@@ -9,9 +9,9 @@ from typing import Any, Dict, List, Tuple
 from urllib.parse import quote, urlencode
 
 import pytz
-from app.core.config import settings
-from app.core.metainfo import MetaInfo
-from app.log import logger
+from app.sdk.config import settings
+from app.sdk.media import MetaInfo
+from app.sdk.logging import logger
 from app.schemas.types import MediaType, NotificationType
 
 from .. import CloudDriveCapability, OwnerDelegator

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.db import SessionFactory
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from .utils import extract_ed2k_filename
 from ...core import OwnerDelegator
@@ -1021,7 +1021,7 @@ class UpgradeService(OwnerDelegator):
         return targets
 
     def _media_server_services(self) -> Dict[str, Any]:
-        from app.helper.mediaserver import MediaServerHelper
+        from app.sdk.services import MediaServerHelper
 
         services = MediaServerHelper().get_services() or {}
         return {

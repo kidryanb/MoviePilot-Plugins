@@ -6,7 +6,7 @@ from pathlib import Path
 
 from alembic.command import revision
 from alembic.config import Config as AlembicConfig
-from app.core.config import settings
+from app.sdk.config import settings
 
 from .models import CloudSubscribeBase
 
