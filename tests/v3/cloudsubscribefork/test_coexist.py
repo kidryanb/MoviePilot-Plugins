@@ -210,6 +210,12 @@ class WiringTest(unittest.TestCase):
         for path in [*frontend.rglob('*.vue'), *frontend.rglob('*.js'), *(PLUGIN_DIR / 'dist').rglob('*.js')]:
             self.assertNotIn('赞赏', path.read_text(encoding='utf-8'), path)
 
+    def test_page_titles_mark_the_fork(self):
+        """页面标题带「改版」，和原版插件一眼区分。"""
+        components = ROOT / 'frontend' / 'cloudsubscribe' / 'src' / 'components'
+        for name in ('Page.vue', 'AppPage.vue', 'Config.vue', 'Dashboard.vue'):
+            self.assertIn('网盘订阅助手（改版）', (components / name).read_text(encoding='utf-8'), name)
+
     def test_built_frontend_is_fully_tracked(self):
         """remoteEntry 引用的每个构建文件都必须提交到仓库，否则市场安装后组件加载失败。"""
         import re
