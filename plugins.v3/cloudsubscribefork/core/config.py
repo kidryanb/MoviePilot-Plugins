@@ -166,7 +166,7 @@ class UIConfig:
             "search_circuit_breaker_enabled": True,
             "search_circuit_breaker_threshold": 3,
             "search_circuit_breaker_cooldown": 60,
-            "subscribe_filter_mode": "include",
+            "subscribe_filter_mode": "include",  # 始终接管时由 coexist 规范化为 all
             "exclude_subscribes": [],
             "include_subscribes": [],
             "block_system_subscribe": False,

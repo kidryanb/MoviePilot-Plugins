@@ -16,10 +16,11 @@ export function createTransferSection(options) {
             label: "订阅筛选模式",
             type: "select",
             items: [
-              { title: "排除所选订阅", value: "exclude" },
+              { title: "处理所有订阅", value: "all" },
               { title: "仅处理所选订阅", value: "include" },
+              { title: "排除所选订阅", value: "exclude" },
             ],
-            hint: "默认仅处理所选订阅：没勾选的订阅照常走下载器，由「下载完成自动上传」上传。",
+            hint: "跟随基础设置：开启「始终接管系统订阅」时默认处理所有订阅；否则默认只处理勾选的订阅，没勾选的照常走下载器，由「下载完成自动上传」上传。",
             cols: 4,
           },
           {
@@ -271,7 +272,7 @@ export function createTransferSection(options) {
           {
             key: "strm_generate_enabled",
             label: "转存后直接生成 STRM",
-            hint: "转存完成后按模板为媒体生成 STRM 文件",
+            hint: "转存完成后按模板为媒体生成 STRM 文件。115 例外：已启用 P115StrmHelper 时，115 的 STRM 由它生成",
             type: "switch",
             cols: 6,
           },

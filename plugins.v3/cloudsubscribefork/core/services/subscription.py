@@ -16,9 +16,12 @@ class SubscriptionControlService(OwnerDelegator):
         """
         按订阅过滤模式判断订阅是否不归本插件处理
 
+        - all 全部模式：处理所有订阅
         - exclude 排除模式：勾选的订阅被排除，其余全部处理
         - include 指定模式：仅处理勾选的订阅，其余全部排除
         """
+        if self._subscribe_filter_mode == "all":
+            return False
         if self._subscribe_filter_mode == "include":
             return subscribe_id not in set(self._include_subscribes or [])
         return subscribe_id in set(self._exclude_subscribes or [])

@@ -980,7 +980,9 @@ class SyncExecutionService(OwnerDelegator):
                 )
 
         if skipped_count:
-            mode_label = "指定模式" if self._subscribe_filter_mode == "include" else "排除模式"
+            mode_label = {"include": "指定模式", "exclude": "排除模式"}.get(
+                self._subscribe_filter_mode, "全部模式"
+            )
             logger.debug(f"订阅过滤（{mode_label}）：跳过 {skipped_count} 个订阅")
 
         action_name = "整理" if direct_cloud_path_only else "转存"

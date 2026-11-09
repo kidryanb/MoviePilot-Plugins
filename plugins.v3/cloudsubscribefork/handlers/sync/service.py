@@ -375,6 +375,14 @@ class SyncHandler(DriveScopeMixin):
             )
 
         self._strm_generate_enabled = bool(_get_val("strm_generate_enabled", False))
+        if (
+                self._strm_generate_enabled
+                and getattr(self._cloud_drive, "key", "") == "115"
+                and bool(_get_val("p115_strm_by_helper", False))
+        ):
+            # 115 例外：P115StrmHelper 已启用时由它生成 115 的 STRM，本插件不重复写
+            logger.info("P115StrmHelper 已启用，115 的 STRM 交给它生成，本插件只为其他网盘生成 STRM")
+            self._strm_generate_enabled = False
         self._nfo_scrape_enabled = bool(_get_val("nfo_scrape_enabled", False))
         self._image_scrape_enabled = bool(_get_val("image_scrape_enabled", False))
         self._platform_transfer_history_enabled = bool(

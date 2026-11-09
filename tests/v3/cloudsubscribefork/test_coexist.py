@@ -38,9 +38,45 @@ class ForcedValuesTest(unittest.TestCase):
         self.assertIs(config['enable_pt_upgrade'], False)
 
     def test_new_install_defaults_do_not_take_over(self):
-        self.assertEqual(coexist.COEXIST_DEFAULTS['subscribe_filter_mode'], 'include')
+        self.assertNotIn('subscribe_filter_mode', coexist.COEXIST_DEFAULTS)
         self.assertEqual(coexist.COEXIST_DEFAULTS['platform_download_policy'], 'allow')
         self.assertIs(coexist.COEXIST_DEFAULTS['strm_generate_enabled'], False)
+
+
+class SubscribeFilterModeTest(unittest.TestCase):
+    def normalize(self, **config):
+        mode = coexist.normalize_subscribe_filter_mode(config)
+        self.assertEqual(config['subscribe_filter_mode'], mode)
+        return mode
+
+    def test_default_follows_always_takeover(self):
+        self.assertEqual(self.normalize(), 'include')
+        self.assertEqual(self.normalize(block_system_subscribe=True), 'all')
+        self.assertEqual(self.normalize(subscribe_filter_mode='???'), 'include')
+
+    def test_always_takeover_with_empty_selection_means_all(self):
+        self.assertEqual(self.normalize(block_system_subscribe=True, subscribe_filter_mode='exclude'), 'all')
+        self.assertEqual(self.normalize(block_system_subscribe=True, subscribe_filter_mode='include'), 'all')
+
+    def test_explicit_selection_is_kept(self):
+        self.assertEqual(self.normalize(block_system_subscribe=True, subscribe_filter_mode='exclude',
+                                        exclude_subscribes=[3]), 'exclude')
+        self.assertEqual(self.normalize(subscribe_filter_mode='include'), 'include')
+        self.assertEqual(self.normalize(subscribe_filter_mode='all'), 'all')
+
+
+class StrmHelperTest(unittest.TestCase):
+    def test_enabled_flag(self):
+        self.assertTrue(coexist.strm_helper_enabled(reader({'P115StrmHelper': {'enabled': True}})))
+        self.assertFalse(coexist.strm_helper_enabled(reader({'P115StrmHelper': {'enabled': False}})))
+        self.assertFalse(coexist.strm_helper_enabled(reader({})))
+
+    def test_sync_handler_skips_115_strm_when_helper_enabled(self):
+        service = (PLUGIN_DIR / 'handlers' / 'sync' / 'service.py').read_text(encoding='utf-8')
+        self.assertIn('getattr(self._cloud_drive, "key", "") == "115"', service)
+        self.assertIn('_get_val("p115_strm_by_helper", False)', service)
+        subscription = (PLUGIN_DIR / 'core' / 'services' / 'subscription.py').read_text(encoding='utf-8')
+        self.assertIn('if self._subscribe_filter_mode == "all":', subscription)
 
 
 class CookieTest(unittest.TestCase):

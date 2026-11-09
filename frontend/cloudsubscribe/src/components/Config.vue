@@ -859,6 +859,29 @@ const testFansubs = computed(() => {
   })
   return [...counts.values()].sort((a, b) => b.count - a.count)
 })
+// 订阅筛选模式跟随「始终接管系统订阅」：开启时处理所有订阅，关闭时回到只处理勾选的订阅。
+// 只响应用户在界面上切换开关；从服务端载入配置时不改动已保存的模式。
+let applyingServerConfig = false
+function assignServerConfig(value) {
+  applyingServerConfig = true
+  try {
+    Object.assign(config, JSON.parse(JSON.stringify(value || {})))
+  } finally {
+    applyingServerConfig = false
+  }
+}
+watch(
+  () => config.block_system_subscribe,
+  (alwaysTakeover, previous) => {
+    if (applyingServerConfig || previous === undefined || alwaysTakeover === previous) return
+    if (alwaysTakeover) {
+      config.subscribe_filter_mode = "all"
+    } else if (config.subscribe_filter_mode === "all") {
+      config.subscribe_filter_mode = "include"
+    }
+  },
+  { flush: "sync" },
+)
 watch(testFansubs, (fansubs) => {
   if (selectedTestFansub.value && !fansubs.some((item) => item.value === selectedTestFansub.value)) {
     selectedTestFansub.value = ""
@@ -1523,7 +1546,7 @@ async function save() {
     }
     const savedConfig = response.data?.data || response.data
     if (savedConfig && typeof savedConfig === "object") {
-      Object.assign(config, JSON.parse(JSON.stringify(savedConfig)))
+      assignServerConfig(savedConfig)
     }
     await reloadVisibleOptionScopes()
     notify(response.message || "配置已保存")
@@ -1775,7 +1798,7 @@ onBeforeUnmount(() => {
 watch(
   () => props.initialConfig,
   (value) => {
-    Object.assign(config, JSON.parse(JSON.stringify(value || {})))
+    assignServerConfig(value)
   },
   { deep: true },
 )

@@ -25,13 +25,68 @@ FORCED_VALUES: Dict[str, Any] = {
     "enable_pt_upgrade": False,
 }
 
-#: 新装默认值：只接管勾选的订阅，不拦截平台下载，不自己写 115 STRM。
+#: 新装默认值：不拦截平台下载，不自己写 115 STRM。订阅筛选模式的默认值随
+#: 「始终接管系统订阅」变化，见 ``default_subscribe_filter_mode``。
 COEXIST_DEFAULTS: Dict[str, Any] = {
-    "subscribe_filter_mode": "include",
     "platform_download_policy": "allow",
     "strm_generate_enabled": False,
     COOKIE_SOURCE_KEY: COOKIE_SOURCE_STRM_HELPER,
 }
+
+
+#: 订阅筛选模式：处理所有订阅 / 仅处理所选订阅 / 排除所选订阅
+SUBSCRIBE_FILTER_ALL = "all"
+SUBSCRIBE_FILTER_INCLUDE = "include"
+SUBSCRIBE_FILTER_EXCLUDE = "exclude"
+SUBSCRIBE_FILTER_MODES = (SUBSCRIBE_FILTER_ALL, SUBSCRIBE_FILTER_INCLUDE, SUBSCRIBE_FILTER_EXCLUDE)
+
+
+def default_subscribe_filter_mode(config: Dict[str, Any]) -> str:
+    """
+    订阅筛选模式的默认值跟随基础设置里的「始终接管系统订阅」。
+
+    始终接管时默认处理所有订阅；否则默认只处理勾选的订阅，没勾选的照常走下载器，
+    由「下载完成自动上传」负责。
+
+    :param config: 插件配置
+    :return: 默认模式
+    """
+    return SUBSCRIBE_FILTER_ALL if config.get("block_system_subscribe") else SUBSCRIBE_FILTER_INCLUDE
+
+
+def normalize_subscribe_filter_mode(config: Dict[str, Any]) -> str:
+    """
+    规范化订阅筛选模式，原地写回 ``config``。
+
+    - 缺省或未知值：按 ``default_subscribe_filter_mode`` 补齐
+    - 已开启「始终接管系统订阅」且当前模式下一个订阅都没勾选：视为处理所有订阅。
+      排除模式下空列表本来就等于全部处理；指定模式下空列表会让始终接管什么也不处理，
+      与「始终接管」的意图相反。
+
+    :param config: 插件配置，原地修改
+    :return: 规范化后的模式
+    """
+    mode = str(config.get("subscribe_filter_mode") or "").strip().lower()
+    if mode not in SUBSCRIBE_FILTER_MODES:
+        mode = default_subscribe_filter_mode(config)
+    selected_key = {
+        SUBSCRIBE_FILTER_INCLUDE: "include_subscribes",
+        SUBSCRIBE_FILTER_EXCLUDE: "exclude_subscribes",
+    }.get(mode)
+    if config.get("block_system_subscribe") and selected_key and not config.get(selected_key):
+        mode = SUBSCRIBE_FILTER_ALL
+    config["subscribe_filter_mode"] = mode
+    return mode
+
+
+def strm_helper_enabled(reader: Optional[Callable[[str], Dict[str, Any]]] = None) -> bool:
+    """
+    P115StrmHelper 是否已启用。启用时 115 的 STRM 由它生成，本插件不再为 115 写 STRM。
+
+    :param reader: 读取插件配置的函数，测试时注入
+    """
+    config = (reader or _default_config_reader)(STRM_HELPER_PLUGIN_ID) or {}
+    return bool(config.get("enabled"))
 
 
 def enforce_forced_values(config: Dict[str, Any]) -> List[str]:
