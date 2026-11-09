@@ -1,4 +1,4 @@
-import { enabled, renderStrmSample, strmProxyStatusLine, strmProxySuggestion, strmVariableHint } from "./helpers.js"
+import { enabled, renderStrmSample, strmOtherDriveSample, strmProxyStatusLine, strmProxySuggestion, strmVariableHint } from "./helpers.js"
 
 export function createTransferSection(options) {
   const variableHint = strmVariableHint(options)
@@ -279,7 +279,7 @@ export function createTransferSection(options) {
           {
             key: "strm_proxy_enabled",
             label: "STRM 播放代理",
-            hint: "播放时解析直链：115 等直接 302 跳转；夸克直链要带 Cookie，改为分段中转，支持拖动进度",
+            hint: "播放时解析直链：115 等直接 302 跳转；夸克直链要带 Cookie，由插件中转（流量走本机），支持拖动进度",
             type: "switch",
             cols: 6,
             show: enabled("strm_generate_enabled"),
@@ -302,7 +302,7 @@ export function createTransferSection(options) {
             key: "strm_base_url",
             label: "STRM 基础地址 / 播放代理地址",
             placeholder: "http://192.168.1.10:3001",
-            hint: "不含端口，端口单独填写",
+            hint: "播放器能访问到的 MP 地址，不含端口。不要填 172.17.0.1 这类 Docker 内网地址",
             cols: 6,
             show: enabled("strm_generate_enabled"),
           },
@@ -332,7 +332,12 @@ export function createTransferSection(options) {
             lines: (config) => {
               const sample = renderStrmSample(config)
               return [
-                sample ? `STRM 内容：${sample}` : "填写基础地址、端口与模板后此处实时显示 STRM 内容",
+                sample
+                  ? ((config.preferred_drives || [])[0] === "115"
+                    ? `115 STRM 内容：${sample}（已启用 P115StrmHelper 时由它生成，这条和下面的模板不生效）`
+                    : `默认网盘 STRM 内容：${sample}`)
+                  : "填写基础地址、端口与模板后此处实时显示 STRM 内容",
+                ...strmOtherDriveSample(config).split("\n"),
                 strmProxyStatusLine(config, options),
                 strmProxySuggestion(config, options),
                 variableHint,

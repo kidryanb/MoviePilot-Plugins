@@ -101,6 +101,26 @@ export function renderStrmSample(config) {
   return template.replace(/\{(\w+)\}/g, (match, name) => (values[name] ? values[name] : `<${name}>`))
 }
 
+/**
+ * 夸克等默认盘以外网盘的 STRM 示例：插件自动用带网盘前缀的 file_id 短链，
+ * 不使用上面的模板；需要开启播放代理，夸克播放时走带 Cookie 的分段中转。
+ */
+export function strmOtherDriveSample(config) {
+  const drives = Array.isArray(config?.preferred_drives) ? config.preferred_drives : []
+  const others = drives.slice(1).filter((key) => key && key !== "115")
+  if (!others.length) return ""
+  if (!config?.strm_proxy_enabled) {
+    return `${others.join("、")} 的 STRM 需要打开「STRM 播放代理」才会生成`
+  }
+  const base = String(config?.strm_base_url || "").replace(/\/+$/, "")
+  const port = Math.trunc(Number(config?.strm_proxy_port || 0)) || 0
+  const entry = port > 0 && !hasExplicitPort(base) ? `${base}:${port}` : base
+  const route = String(config?.strm_proxy_route || "d").replace(/^\/+|\/+$/g, "") || "d"
+  return others
+    .map((key) => `${key} STRM 内容（自动，不用改模板）：${entry}/${route}/${key}/<file_id>?/${STRM_SAMPLE_VALUES.file_name}`)
+    .join("\n")
+}
+
 /** 代理模式下模板未指向代理入口时，给出建议模板（不改写用户配置）。 */
 export function strmProxySuggestion(config, options) {
   if (!config?.strm_proxy_enabled) return ""
