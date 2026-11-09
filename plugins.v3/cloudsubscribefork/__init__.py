@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 0.2.3：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存（core/drive_routing.py）。
+# 本仓库 plugin_version 0.2.4：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存（core/drive_routing.py）。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -55,6 +55,8 @@ from .core.services import (
 )
 from .core.coexist import (
     COEXIST_DEFAULTS,
+    normalize_subscribe_filter_mode,
+    strm_helper_enabled,
     COOKIE_SOURCE_KEY,
     enforce_forced_values,
     normalize_cookie_source,
@@ -121,7 +123,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/kidryanb/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.2.3"
+    plugin_version = "0.2.4"
     # 插件作者
     plugin_author = "kidryanb"
     # 作者主页
@@ -160,8 +162,9 @@ class CloudSubscribeFork(_PluginBase):
     _resource_type_order: List[str] = ["115", "ed2k"]
     _magnet_metadata_url_template: str = "https://itorrents.org/torrent/{info_hash}.torrent"
 
-    # 订阅过滤模式："exclude" 排除模式（处理除勾选外的全部订阅）/ "include" 指定模式（仅处理勾选的订阅）
+    # 订阅过滤模式："all" 处理所有订阅 / "exclude" 排除勾选的订阅 / "include" 只处理勾选的订阅
     _subscribe_filter_mode: str = "include"
+    _p115_strm_by_helper: bool = False
     _exclude_subscribes: List[int] = []
     _include_subscribes: List[int] = []
     # 搜索源优先级（按列表顺序），为空时使用已启用来源的默认顺序
@@ -493,6 +496,7 @@ class CloudSubscribeFork(_PluginBase):
         # 与 DownloadCloudUpload 共存：补齐新装默认值，并锁定会重复上传的开关。
         for key, value in COEXIST_DEFAULTS.items():
             config.setdefault(key, value)
+        normalize_subscribe_filter_mode(config)
         for key in enforce_forced_values(config):
             logger.warning(f"共存模式不允许开启 {key}，已自动关闭；下载器任务的上传由「下载完成自动上传」负责")
         if "platform_download_policy" in config:
@@ -683,6 +687,8 @@ class CloudSubscribeFork(_PluginBase):
         """按共存规则决定 115 Cookie，并记录需要提示用户的原因。"""
         self._p115_cookie_source = normalize_cookie_source(config.get(COOKIE_SOURCE_KEY))
         self._cookies, self._coexist_notes = resolve_115_cookie(config)
+        # P115StrmHelper 启用时 115 的 STRM 归它生成，本插件只给其他网盘写 STRM
+        self._p115_strm_by_helper = strm_helper_enabled()
         for note in self._coexist_notes:
             logger.warning(note)
 
@@ -755,11 +761,13 @@ class CloudSubscribeFork(_PluginBase):
         self._auto_subscribe_onlyonce = bool(config.get("auto_subscribe_onlyonce", False))
         self._auto_subscribe_cron = str(config.get("auto_subscribe_cron", "0 8 * * *") or "0 8 * * *").strip()
 
-        self._subscribe_filter_mode = config.get("subscribe_filter_mode", "include") or "include"
+        self._subscribe_filter_mode = normalize_subscribe_filter_mode(dict(config))
         self._exclude_subscribes = config.get("exclude_subscribes", []) or []
         self._include_subscribes = config.get("include_subscribes", []) or []
         if self._subscribe_filter_mode == "include":
             logger.info(f"订阅过滤模式：指定模式，仅处理 {len(self._include_subscribes)} 个勾选订阅")
+        elif self._subscribe_filter_mode == "all":
+            logger.info("订阅过滤模式：处理所有订阅")
 
         self._checkin_cron = str(config.get("checkin_cron") or "0 8 * * *").strip()
         self._checkin_auto_retry = bool(config.get("checkin_auto_retry", True))
