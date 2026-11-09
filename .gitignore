@@ -6,3 +6,5 @@ __pycache__/
 .env
 dist/
 .reference/
+node_modules/
+!plugins.v3/cloudsubscribe/dist/
