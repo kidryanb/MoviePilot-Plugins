@@ -208,6 +208,11 @@ class StrmProxyDriveTest(unittest.TestCase):
         item = self.owner._resolve_file(params, self.quark)
         self.assertEqual(item.playback_values, {'file_id': 'fid123'})
 
+    def test_proxy_server_does_not_block_plugin_stop(self):
+        # 正在播放的中转流不能卡住停用 / 更新插件
+        self.assertTrue(strm_proxy._ProxyHTTPServer.daemon_threads)
+        self.assertFalse(strm_proxy._ProxyHTTPServer.block_on_close)
+
     def test_unknown_prefix_is_not_a_drive(self):
         self.assertIsNone(self.owner._proxy_drive({'drive': 'baidu'}))
 
@@ -432,6 +437,12 @@ class WiringTest(unittest.TestCase):
         self.assertIn('and not self._strm_by_helper', self.read('handlers/sync/history.py'))
         self.assertIn('and not self._strm_by_helper', self.read('handlers/sync/postprocess.py'))
         self.assertIn('self._strm_by_helper = True', self.read('handlers/sync/service.py'))
+
+    def test_stop_service_bounds_blocking_steps(self):
+        plugin = self.read('__init__.py')
+        self.assertIn('def _run_bounded(', plugin)
+        for step in ('停止播放代理监听', '关闭网盘客户端', '关闭搜索客户端', '关闭反盾浏览器会话'):
+            self.assertIn(f'self._run_bounded("{step}"', plugin.replace('self._run_bounded(\n                "', 'self._run_bounded("'))
 
     def test_relay_drives_join_search_types(self):
         manager = self.read('core/drive_manager.py')

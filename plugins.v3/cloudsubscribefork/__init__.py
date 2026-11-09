@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 0.4.2：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
+# 本仓库 plugin_version 0.4.3：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -123,7 +123,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/kidryanb/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.4.2"
+    plugin_version = "0.4.3"
     # 插件作者
     plugin_author = "kidryanb"
     # 作者主页
@@ -1050,9 +1050,31 @@ class CloudSubscribeFork(_PluginBase):
         except Exception as error:
             logger.error(f"榜单自动订阅立即执行失败：{error}")
 
+    @staticmethod
+    def _run_bounded(name: str, func, timeout: float = 10.0) -> None:
+        """
+        停止流程里可能阻塞的收尾步骤放到守护线程里跑，最多等 ``timeout`` 秒。
+
+        网盘、搜索、浏览器会话等关闭时可能卡在网络请求上；超时就放手继续，
+        避免整个插件生命周期（停用、更新、保存配置）被一步收尾卡住。
+        """
+        import threading
+
+        def runner():
+            try:
+                func()
+            except Exception as error:
+                logger.debug(f"{name}失败：{error}")
+
+        worker = threading.Thread(target=runner, name=f"cloudsubscribefork-stop-{name}", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            logger.warning(f"{name}超过 {int(timeout)} 秒未完成，已跳过等待，继续停止插件")
+
     def stop_service(self, preserve_subscribe_queue: bool = False):
         """停止服务"""
-        self._stop_strm_proxy_server()
+        self._run_bounded("停止播放代理监听", self._stop_strm_proxy_server)
         if not preserve_subscribe_queue and self._subscribe_search_queue_lock is not None:
             self.cancel_pending_subscribe_searches(shutdown=True)
             executor = self._sync_operation_executor
@@ -1089,22 +1111,17 @@ class CloudSubscribeFork(_PluginBase):
                 media_library_api.close()
         except Exception as error:
             logger.debug(f"关闭媒体库 Webhook 同步调度器失败：{error}")
-        try:
-            if self._sync_handler:
-                self._sync_handler.close()
-        except Exception as error:
-            logger.debug(f"关闭媒体服务器入库通知器失败：{error}")
-        try:
-            if self._search_handler:
-                self._search_handler.close(release_cache=True)
-        except Exception as error:
-            logger.debug(f"关闭搜索客户端失败：{error}")
-        try:
-            if self._drive_manager:
-                self._drive_manager.close()
-                self._drive_manager = None
-        except Exception as error:
-            logger.debug(f"关闭网盘客户端失败：{error}")
+        sync_handler = self._sync_handler
+        if sync_handler:
+            self._run_bounded("关闭媒体服务器入库通知器", sync_handler.close)
+        search_handler = self._search_handler
+        if search_handler:
+            self._run_bounded(
+                "关闭搜索客户端", lambda: search_handler.close(release_cache=True)
+            )
+        drive_manager, self._drive_manager = self._drive_manager, None
+        if drive_manager:
+            self._run_bounded("关闭网盘客户端", drive_manager.close)
         try:
             components = self.__dict__.get("_plugin_components", {})
             platform_service = components.pop(PlatformIntegrationService, None)
@@ -1131,10 +1148,7 @@ class CloudSubscribeFork(_PluginBase):
         except Exception:
             pass
 
-        try:
-            close_cloudflare_solver()
-        except Exception as error:
-            logger.debug(f"关闭反盾浏览器会话失败：{error}")
+        self._run_bounded("关闭反盾浏览器会话", close_cloudflare_solver)
 
         try:
             store = self.__dict__.get("_cloudsubscribe_data_store")
