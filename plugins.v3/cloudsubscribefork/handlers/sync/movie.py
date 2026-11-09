@@ -176,26 +176,30 @@ class MovieSyncProcessor(OwnerDelegator):
                             f"{media_file.name}，媒体详情 {rule_title}，"
                             f"评分 {media_server_score}，{format_size(media_size)}"
                         )
-                existing_movie = self._timed_sync_call(
-                    "cloud_scan",
-                    self._find_cloud_movie_file,
-                    subscribe,
-                    mediainfo,
-                )
+                # 洗版要在电影实际落过的盘里找旧文件（M2），没有记录时用默认盘
+                movie_drive_key = self.subscription_drive_key(subscribe)
+                with self.drive_scope(movie_drive_key):
+                    existing_movie = self._timed_sync_call(
+                        "cloud_scan",
+                        self._find_cloud_movie_file,
+                        subscribe,
+                        mediainfo,
+                    )
                 if existing_movie:
                     upgrade_target_exists = True
                     existing_dir, existing_name, existing_file = existing_movie
-                    if self._strm_generate_enabled:
-                        existing_strm = self._generate_strm(
-                            existing_dir,
-                            existing_name,
-                            target_file=existing_file,
-                        )
-                        if not existing_strm:
-                            logger.debug(
-                                f"电影 {subscribe.name} 真实网盘文件已存在，"
-                                "但 STRM 修复尚未完成"
+                    with self.drive_scope(movie_drive_key):
+                        if self._strm_generate_enabled:
+                            existing_strm = self._generate_strm(
+                                existing_dir,
+                                existing_name,
+                                target_file=existing_file,
                             )
+                            if not existing_strm:
+                                logger.debug(
+                                    f"电影 {subscribe.name} 真实网盘文件已存在，"
+                                    "但 STRM 修复尚未完成"
+                                )
                     if not media_server_has_size:
                         file_name, target_file = existing_name, existing_file
                         existing_size = int(getattr(target_file, "size", 0) or 0)
@@ -399,9 +403,9 @@ class MovieSyncProcessor(OwnerDelegator):
                         continue
                     # 同盘优先：本条资源之后的校验、转存、整理都落到分享所属网盘
                     resource_scope.close()
-                    # 洗版需要替换原盘里的旧文件（M2 再按实际落盘处理），此时不切换网盘
+                    # 洗版要替换原盘里的旧文件：固定在电影实际落过的盘，不按分享类型切换
                     resource_scope.enter_context(
-                        self.drive_scope(None) if upgrade_target_exists
+                        self.subscription_drive_scope(subscribe) if upgrade_target_exists
                         else self.drive_scope_for_url(share_url)
                     )
 

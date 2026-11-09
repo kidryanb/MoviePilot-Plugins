@@ -142,7 +142,8 @@ class UpgradeBaselineService(OwnerDelegator):
     ) -> Dict[int, List[Dict[str, Any]]]:
         """按显式 episode 字段读取插件转存历史，不依赖 STRM 文件名。"""
         cache_key = normalize_platform_cache_key(
-            self._baseline_key(subscribe, season)
+            (*self._baseline_key(subscribe, season),
+             str(getattr(getattr(self, "_cloud_drive", None), "key", "") or ""))
         )
         with self._baseline_cache_lock:
             cached = self._baseline_plugin_cache.get(cache_key)

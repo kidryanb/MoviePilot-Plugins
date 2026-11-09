@@ -90,9 +90,40 @@ class HistoryRetryService(OwnerDelegator):
     def _run_history_retry(
             self, key: str, record_time: str, share_url: str, file_name: str
     ) -> None:
-        # 同盘优先：重试落到分享所属的网盘，与首次转存一致
-        with self.drive_scope_for_url(share_url):
+        # 重试打到记录里的原目标盘（M2）；老记录没有盘信息时按分享类型选盘
+        target_key = self._history_record_drive_key(record_time, share_url, file_name)
+        if not target_key:
+            with self.drive_scope_for_url(share_url):
+                self._run_history_retry_in_scope(key, record_time, share_url, file_name)
+            return
+        with self.fixed_drive_scope(target_key) as active:
+            default_key = str(getattr(self._cloud_drive, "key", "") or "")
+            if (active or default_key) != target_key:
+                reason = f"原目标网盘 {target_key} 当前未登录或未启用，无法重试"
+                logger.error(f"后台重试历史记录失败：{reason}")
+                self._mark_history_retry_failed(record_time, share_url, file_name, reason)
+                with _retry_inflight_lock:
+                    _retry_inflight_keys.discard(key)
+                if self._history_changed:
+                    self._history_changed()
+                return
             self._run_history_retry_in_scope(key, record_time, share_url, file_name)
+
+    def _history_record_drive_key(
+            self, record_time: str, share_url: str, file_name: str
+    ) -> str:
+        """历史记录的目标网盘标识（跨盘记录取 target_drive_key）。"""
+        history = (self._get_data("history") or []) if self._get_data else []
+        for item in history:
+            if (
+                    str(item.get("time") or "") == str(record_time or "")
+                    and str(item.get("share_url") or "") == str(share_url or "")
+                    and str(item.get("file_name") or "") == str(file_name or "")
+            ):
+                return str(
+                    item.get("target_drive_key") or item.get("cloud_drive_key") or ""
+                ).strip().lower()
+        return ""
 
     def _run_history_retry_in_scope(
             self, key: str, record_time: str, share_url: str, file_name: str
@@ -253,7 +284,7 @@ class HistoryRetryService(OwnerDelegator):
             if not source_key or not target_key:
                 raise ValueError("跨盘历史缺少源网盘或目标网盘信息")
             if not self._cloud_drive or target_key != self._cloud_drive.key:
-                raise ValueError("跨盘历史的目标网盘与当前转存网盘不一致")
+                raise ValueError(f"跨盘历史的原目标网盘 {target_key} 当前未登录，无法重试")
             cached_source = CloudFile(
                 id="",
                 name=source_name,

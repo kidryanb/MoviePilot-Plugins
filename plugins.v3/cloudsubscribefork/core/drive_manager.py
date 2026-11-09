@@ -15,6 +15,7 @@ from ..search.types import normalize_resource_type
 from .drive_routing import (
     extend_resource_order,
     pick_default_drive,
+    relay_sources,
     same_cloud_targets,
     search_resource_types,
 )
@@ -71,15 +72,49 @@ class CloudDriveManager:
                 f"同盘优先已生效：默认转存网盘={cloud_key}，"
                 f"另外按分享类型直接转存到 {', '.join(self._plugin._same_cloud_drive_keys)}"
             )
+        relay_keys = self.relay_drive_keys()
+        self._plugin._relay_drive_keys = relay_keys
+        if relay_keys:
+            logger.info(
+                f"跨盘中转已生效：{', '.join(relay_keys)} 上搜到的分享"
+                f"会先存进该盘，再秒传或下载上传到 {cloud_key}"
+            )
         self._plugin._cloud_drive_resource_types = search_resource_types(
             self.active_drive.resource_types if self.active_drive else (),
-            [self.registry.get(key).resource_types for key in self._plugin._same_cloud_drive_keys],
+            [
+                self.registry.get(key).resource_types
+                for key in [*self._plugin._same_cloud_drive_keys, *relay_keys]
+            ],
         )
         self._plugin._resource_type_order = extend_resource_order(
             getattr(self._plugin, "_resource_type_order", []) or [],
-            self._plugin._same_cloud_drive_keys,
+            [*self._plugin._same_cloud_drive_keys, *relay_keys],
         )
         self._filter_supported_resource_types()
+
+    def relay_drive_keys(self) -> List[str]:
+        """
+        跨盘中转来源：已登录、但不是转存目标（默认盘和同盘目标）的网盘。
+
+        这些盘上搜到的分享先存进该盘，再交给 CrossTransferTaskManager 秒传或
+        下载上传到默认盘。跨盘开关关闭、或默认盘不能上传时返回空列表。
+        """
+        if not self.registry or not self.active_drive:
+            return []
+        if not getattr(self._plugin, "_cross_transfer_enabled", False):
+            return []
+        if not self.active_drive.supports(CloudDriveCapability.LOCAL_UPLOAD):
+            return []
+        targets = {self.active_drive.key, *(getattr(self._plugin, "_same_cloud_drive_keys", []) or [])}
+        return relay_sources(
+            [
+                provider.key for provider in self.registry.available()
+                if provider.supports(CloudDriveCapability.SHARE_TRANSFER)
+                and provider.supports(CloudDriveCapability.FILE_QUERY)
+                and provider.supports(CloudDriveCapability.FILE_DOWNLOAD)
+            ],
+            targets,
+        )
 
     def _persist_config(self, **updates: Any) -> None:
         """同步运行时凭据并写回插件完整配置。"""
@@ -137,7 +172,10 @@ class CloudDriveManager:
                             provider.resource_types,
                             [
                                 self.registry.get(other).resource_types
-                                for other in getattr(self._plugin, "_same_cloud_drive_keys", []) or []
+                                for other in [
+                                    *(getattr(self._plugin, "_same_cloud_drive_keys", []) or []),
+                                    *(getattr(self._plugin, "_relay_drive_keys", []) or []),
+                                ]
                                 if other != key and other in {p.key for p in self.registry.available()}
                             ],
                         )

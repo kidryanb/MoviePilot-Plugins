@@ -66,8 +66,8 @@ class TelevisionSyncProcessor(OwnerDelegator):
                     or self._is_cloud_upgrade_subscribe(subscribe)
             )
             ):
-                # 洗版要替换原盘里的旧文件，按订阅实际落盘切换属于 M2，这里固定用默认盘
-                with self.no_drive_routing():
+                # 洗版要替换原盘里的旧文件：固定在这一季实际落过的盘，不按分享类型切换
+                with self.subscription_drive_scope(subscribe):
                     return self._process_tv_subscribe_upgrade(
                         subscribe=subscribe,
                         history=history,

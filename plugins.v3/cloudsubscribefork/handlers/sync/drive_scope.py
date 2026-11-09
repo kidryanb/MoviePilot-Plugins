@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterator, Optional
 
 from ...core.cloud import CloudDriveCapability
-from ...core.drive_routing import route_share
+from ...core.drive_routing import is_offline_link, landed_drive_key, route_offline, route_share
 
 #: 当前线程选定的目标网盘标识；None 表示使用默认网盘
 _ACTIVE_DRIVE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
@@ -191,6 +191,14 @@ class DriveScopeMixin:
         profiles = self.__dict__.get("_drive_profiles", {})
         if not profiles or not share_url or _ROUTING_DISABLED.get():
             return None
+        if is_offline_link(share_url):
+            # 磁力 / ed2k 不属于任何网盘：交给第一个支持离线下载的盘
+            default_drive = self.__dict__.get("_drive_default_cloud_drive")
+            return route_offline(
+                getattr(default_drive, "key", None),
+                bool(self.__dict__.get("_drive_default_offline_download")),
+                [key for key, profile in profiles.items() if profile.get("_offline_download")],
+            )
         try:
             source = self._resource_provider_for_url(str(share_url).strip())
         except Exception:
@@ -214,6 +222,57 @@ class DriveScopeMixin:
 
     @contextmanager
     def drive_scope_for_url(self, share_url: str) -> Iterator[Optional[str]]:
-        """按分享链接进入对应网盘的作用域。"""
+        """按分享链接进入对应网盘的作用域；路由被固定时保持当前网盘不变。"""
+        if _ROUTING_DISABLED.get():
+            yield self.scoped_drive_key()
+            return
         with self.drive_scope(self.route_drive_for_url(share_url)) as key:
             yield key
+
+    def subscription_drive_key(self, subscribe, season: Optional[int] = None) -> Optional[str]:
+        """
+        订阅实际落过的网盘：取这部影片（剧集按季）最近一条未失败转存记录的目标盘。
+
+        :param subscribe: 订阅对象
+        :param season: 剧集季号；为空时按订阅自身的季号，电影忽略
+        :return: 网盘标识；没有记录时为 None（使用默认盘）
+        """
+        from ...core.media import tmdb_id_of
+
+        getter = getattr(self, "_get_data", None)
+        records = (getter("history") or []) if callable(getter) else []
+        return landed_drive_key(
+            records,
+            tmdb_id=tmdb_id_of(subscribe),
+            title=getattr(subscribe, "name", None),
+            season=season if season is not None else getattr(subscribe, "season", None),
+            is_movie=str(getattr(subscribe, "type", "") or "") == "电影",
+        )
+
+    @contextmanager
+    def fixed_drive_scope(self, key: Optional[str]) -> Iterator[Optional[str]]:
+        """固定在指定网盘（不可用时为默认盘），期间不按分享类型切换。"""
+        token = _ROUTING_DISABLED.set(True)
+        try:
+            with self.drive_scope(key) as active:
+                yield active
+        finally:
+            _ROUTING_DISABLED.reset(token)
+
+    @contextmanager
+    def subscription_drive_scope(self, subscribe, season: Optional[int] = None) -> Iterator[Optional[str]]:
+        """
+        洗版用：固定在订阅实际落过的网盘，期间不按分享类型切换。
+
+        其他网盘的分享在这里只能走跨盘转存进这个盘，保证新版本和旧文件在同一个盘里替换。
+        """
+        key = self.subscription_drive_key(subscribe, season)
+        with self.fixed_drive_scope(key) as active:
+            if key and active != key and key != getattr(
+                    self.__dict__.get("_drive_default_cloud_drive"), "key", None):
+                from app.sdk.logging import logger
+
+                logger.warning(
+                    f"洗版目标盘 {key} 当前不可用，改用默认转存网盘：{getattr(subscribe, 'name', '')}"
+                )
+            yield active

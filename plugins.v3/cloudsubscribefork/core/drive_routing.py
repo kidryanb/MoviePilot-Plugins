@@ -97,6 +97,105 @@ def route_share(
     return key if key in targets else None
 
 
+def is_offline_link(url: Any) -> bool:
+    """磁力或 ed2k 链接（需要网盘离线下载，而不是分享转存）。"""
+    text = str(url or "").strip().lower()
+    return text.startswith("magnet:") or text.startswith("ed2k://")
+
+
+def route_offline(
+        default_key: Optional[str],
+        default_has_offline: bool,
+        offline_targets: Sequence[str],
+) -> Optional[str]:
+    """
+    决定磁力 / ed2k 交给哪个盘离线下载。
+
+    默认盘能离线就留在默认盘；否则按兜底顺序交给第一个支持离线下载的同盘目标。
+    夸克、阿里、UC、天翼没有离线能力，不会出现在 ``offline_targets`` 里。
+
+    :param default_key: 默认转存网盘
+    :param default_has_offline: 默认盘是否支持离线下载
+    :param offline_targets: 支持离线下载的同盘目标，按兜底顺序
+    :return: 需要切换到的网盘标识；留在默认盘时为 None
+    """
+    if default_has_offline:
+        return None
+    default = str(default_key or "").strip().lower()
+    for key in offline_targets:
+        normalized = str(key or "").strip().lower()
+        if normalized and normalized != default:
+            return normalized
+    return None
+
+
+def relay_sources(ready_download_drives: Iterable[str], targets: Iterable[str]) -> List[str]:
+    """
+    跨盘中转来源：已登录、能转存分享并下载文件、但不是转存目标的网盘。
+
+    :param ready_download_drives: 已登录且支持分享转存与文件下载的网盘
+    :param targets: 转存目标（默认盘与同盘目标）
+    :return: 中转来源，保持传入顺序
+    """
+    target_set = {str(key).strip().lower() for key in targets}
+    return [key for key in _clean_keys(ready_download_drives) if key not in target_set]
+
+
+#: 不代表文件已落盘的历史状态
+_NOT_LANDED_STATUSES = frozenset({"失败", "转存失败", "已删除"})
+
+
+def landed_drive_key(
+        records: Iterable[dict],
+        tmdb_id: Any = None,
+        title: Any = None,
+        season: Any = None,
+        is_movie: bool = False,
+) -> Optional[str]:
+    """
+    从插件转存历史里找出一部影片（剧集按季）最近一次落到的网盘。
+
+    :param records: 插件转存历史
+    :param tmdb_id: 影片 TMDB ID，优先用它匹配
+    :param title: 没有 TMDB ID 时按标题匹配
+    :param season: 剧集季号（电影忽略）
+    :param is_movie: 是否电影
+    :return: 网盘标识；没有可用记录时为 None
+    """
+    def as_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    want_tmdb = as_int(tmdb_id)
+    want_title = str(title or "").strip()
+    want_season = as_int(season) or 1
+    best_time, best_key = "", None
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("status") or "") in _NOT_LANDED_STATUSES:
+            continue
+        if want_tmdb:
+            if as_int(record.get("tmdb_id")) != want_tmdb:
+                continue
+        elif not want_title or str(record.get("title") or "").strip() != want_title:
+            continue
+        record_is_movie = str(record.get("type") or "") == "电影"
+        if record_is_movie != bool(is_movie):
+            continue
+        if not is_movie and (as_int(record.get("season")) or 1) != want_season:
+            continue
+        key = str(record.get("target_drive_key") or record.get("cloud_drive_key") or "").strip().lower()
+        if not key:
+            continue
+        stamp = str(record.get("time") or "")
+        if best_key is None or stamp >= best_time:
+            best_time, best_key = stamp, key
+    return best_key
+
+
 def search_resource_types(default_types: Iterable[str], target_types: Iterable[Iterable[str]]) -> frozenset:
     """
     订阅搜索允许的分享类型：默认盘支持的类型并上所有同盘目标支持的类型。
