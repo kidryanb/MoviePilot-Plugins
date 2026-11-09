@@ -168,6 +168,12 @@ class WiringTest(unittest.TestCase):
     def test_built_frontend_is_present(self):
         self.assertTrue((PLUGIN_DIR / 'dist' / 'assets' / 'remoteEntry.js').is_file())
 
+    def test_no_upstream_reward_entry(self):
+        """改版不挂原作者的赞赏入口。"""
+        frontend = ROOT / 'frontend' / 'cloudsubscribe' / 'src'
+        for path in [*frontend.rglob('*.vue'), *frontend.rglob('*.js'), *(PLUGIN_DIR / 'dist').rglob('*.js')]:
+            self.assertNotIn('赞赏', path.read_text(encoding='utf-8'), path)
+
     def test_built_frontend_is_fully_tracked(self):
         """remoteEntry 引用的每个构建文件都必须提交到仓库，否则市场安装后组件加载失败。"""
         import re

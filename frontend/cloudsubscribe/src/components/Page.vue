@@ -9,15 +9,6 @@
           class="header-action"
           variant="text"
           size="small"
-          prepend-icon="mdi-coffee-outline"
-          title="赞赏支持"
-          @click="rewardVisible = true">
-          赞赏支持
-        </v-btn>
-        <v-btn
-          class="header-action"
-          variant="text"
-          size="small"
           prepend-icon="mdi-cog-outline"
           title="配置"
           @click="emit('switch')">
@@ -264,7 +255,6 @@
       @confirm="notifyHistory">
       将为“{{ notifyingSummaryTitle || notifyingRecord?.file_name || "此记录" }}”重新发送入库通知和Webhook。
     </ConfirmDialog>
-    <RewardDialog v-model="rewardVisible" />
   </div>
 </template>
 
@@ -281,7 +271,6 @@ import { createPluginApi } from "../api"
 const ConfirmDialog = defineAsyncComponent(() => import("./dialogs/ConfirmDialog.vue"))
 const ManualResourceDialog = defineAsyncComponent(() => import("./dialogs/ManualResourceDialog.vue"))
 const OfflineTasksDialog = defineAsyncComponent(() => import("./dialogs/OfflineTasksDialog.vue"))
-const RewardDialog = defineAsyncComponent(() => import("./dialogs/RewardDialog.vue"))
 
 const props = defineProps({
   api: { type: [Object, Function], required: true },
@@ -289,7 +278,6 @@ const props = defineProps({
 const emit = defineEmits(["close", "switch", "action"])
 const api = props.api
 const pluginApi = createPluginApi(props.api, "CloudSubscribeFork")
-const rewardVisible = ref(false)
 const message = ref(""),
   messageType = ref("success"),
   messageVisible = ref(false),
