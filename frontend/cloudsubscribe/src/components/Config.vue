@@ -10,7 +10,7 @@
                 <v-icon icon="mdi-cloud-cog-outline" color="primary" size="18" class="sidebar-brand-icon" />
               </div>
               <div class="sidebar-brand-text">
-                <span class="sidebar-brand-title">网盘订阅助手</span>
+                <span class="sidebar-brand-title">网盘订阅助手（改版）</span>
                 <span class="sidebar-brand-subtitle">CloudSubscribe</span>
               </div>
             </div>
