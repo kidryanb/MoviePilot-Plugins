@@ -10,18 +10,18 @@
 | 上游提交 | `876462067593d4fc2f7bc038f2f73d3eaf099b76`（2026-11-05，说明为「更新版本v1.7.7」） |
 | 上游版本 | `package.v2.json` 与当时的 `plugin_version` 都是 `1.7.7` |
 | 许可 | GPL-3.0-only。插件目录与 `frontend/cloudsubscribe/LICENSE` 各有一份全文 |
-| 本仓库版本 | `0.2.0`（`package.v3.json` 与 `plugin_version`）；引入起点为 `0.0.1-fork` |
-| 插件代码 | `plugins.v3/cloudsubscribe/` |
+| 本仓库版本 | `0.2.1`（`package.v3.json` 与 `plugin_version`）；引入起点为 `0.0.1-fork` |
+| 插件代码 | `plugins.v3/cloudsubscribefork/` |
 | 前端源码 | `frontend/cloudsubscribe/` |
 | 上游使用说明副本 | `docs/cloudsubscribe.md` |
 
 引入那一轮（`0.0.1-fork`）只引入代码并写清单。`0.1.0` 完成 M0 的 SDK 对齐和共存规则，转存、搜索、订阅的业务逻辑仍与上游一致。`DownloadCloudUpload` 的代码和 `package.v3.json` 条目始终未改。两份 `icons/cloud.png` 哈希相同，清单继续引用仓库里已有的 `cloud.png`。
 
-入口类仍是 `CloudSubscribe`，`0.1.0` 起继承 `app.sdk.plugin._PluginBase`（`plugins.v3/cloudsubscribe/__init__.py`），与本仓库 DownloadCloudUpload 一致。
+`0.2.1` 起插件 ID 和入口类改为 `CloudSubscribeFork`（目录 `plugins.v3/cloudsubscribefork/`），名称「网盘订阅助手（改版）」。原因：MP V3 插件市场按插件 ID 合并卡片、只留最高版本，用原 ID `CloudSubscribe` 时本仓库的版本会被原作者仓库的 1.7.7 盖掉，装好后还可能把 1.7.7 当成更新覆盖改版。改名后数据目录、定时服务 ID、整理历史的下载器标记（`网盘订阅助手（改版）`）都与原版分开。入口类 `0.1.0` 起继承 `app.sdk.plugin._PluginBase`，与本仓库 DownloadCloudUpload 一致。
 
 ## 与 DownloadCloudUpload 共存
 
-本仓库原有的「下载完成自动上传」(DownloadCloudUpload) 和本插件会装在同一个 MoviePilot 里。分工固定为：**下载器任务上传 115 归 DownloadCloudUpload，本插件只做网盘分享转存**。后面每一期都不能打破下面几条，规则集中在 `plugins.v3/cloudsubscribe/core/coexist.py`。
+本仓库原有的「下载完成自动上传」(DownloadCloudUpload) 和本插件会装在同一个 MoviePilot 里。分工固定为：**下载器任务上传 115 归 DownloadCloudUpload，本插件只做网盘分享转存**。后面每一期都不能打破下面几条，规则集中在 `plugins.v3/cloudsubscribefork/core/coexist.py`。
 
 | # | 重叠点（上游代码） | 规则 | 状态 |
 | --- | --- | --- | --- |
@@ -202,14 +202,14 @@ MoviePilot 的订阅搜索由本插件接管，用已有多源（至少包括 Pa
 
 这一轮已经完成引入和清单登记。下面没勾的都还没做。
 
-- [x] 源码在 `plugins.v3/cloudsubscribe`，前端在 `frontend/cloudsubscribe`，`package.v3.json` 登记为 `0.0.1-fork`
+- [x] 源码在 `plugins.v3/cloudsubscribefork`，前端在 `frontend/cloudsubscribe`，`package.v3.json` 登记为 `0.0.1-fork`
 - [x] 保留 GPL-3.0 全文，并在 README / `__init__.py` 写明上游仓库与提交
 - [x] 入口改为 `app.sdk.plugin._PluginBase`；日志、配置、事件、缓存、媒体、网络等改为 `app.sdk.*`。按 MoviePilot `v3` 分支源码静态核对过，全部 `app.*` 导入都能解析（无 SDK 入口的 `app.db.*_oper` 等仍走宿主兼容层）
 - [x] 依赖清单改为 `pyproject.toml`
 - [x] 115 扫码：上游已有（`P115ClientManager`）。共存模式默认复用 P115StrmHelper，只有 `p115_cookie_source=own` 时开放扫码
 - [x] 夸克扫码：上游已有（`QuarkClient`，`quark_cookie`），未改
 - [x] 空 `cookies` 不再把 115 当成已就绪：`P115DriverDefinition.create_client` 返回 `None`，扫码走临时服务
-- [x] 设置页沿用现有 Vue 前端；构建输出改到 `plugins.v3/cloudsubscribe/dist/assets` 并随源码提交（`.gitignore` 单独放行）
+- [x] 设置页沿用现有 Vue 前端；构建输出改到 `plugins.v3/cloudsubscribefork/dist/assets` 并随源码提交（`.gitignore` 单独放行）
 - [x] 共存规则 1–5（见「与 DownloadCloudUpload 共存」）
 - [ ] 在真实 MP V3 宿主里安装、启用、停用、重载各一次，确认日志无导入错误、`DEBUG=true` 下旧导入提示只剩无 SDK 入口的几项
 - [ ] 联邦组件 CSS 是否污染主程序（V3 开发指南 8.3），在真实页面检查
