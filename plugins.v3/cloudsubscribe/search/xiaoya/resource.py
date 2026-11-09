@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import XiaoyaClient
 from ..types import append_share_password, normalize_resource_type

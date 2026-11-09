@@ -13,7 +13,7 @@ from urllib.parse import quote, unquote, urlparse
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from app.log import logger
+from app.sdk.logging import logger
 from starlette import status
 
 from .. import CloudDriveCapability, CloudFile, OwnerDelegator

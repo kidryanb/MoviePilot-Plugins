@@ -3,7 +3,7 @@ import re
 import xml.dom.minidom
 from typing import Iterator
 
-from app.utils.dom import DomUtils
+from app.sdk.utilities import DomUtils
 
 from ...core.subscribe import MediaCandidate
 

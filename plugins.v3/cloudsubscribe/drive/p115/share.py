@@ -6,7 +6,7 @@ from dataclasses import asdict
 from itertools import islice
 from typing import Any, Dict, List, Tuple
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..common import DRIVE_RETRY_EXCEPTIONS, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ...core import OwnerDelegator
 from ...utils import parse_magnet_metadata

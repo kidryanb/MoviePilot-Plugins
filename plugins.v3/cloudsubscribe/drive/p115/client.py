@@ -11,7 +11,7 @@ from io import BytesIO
 from typing import Optional, List, Dict, Any, Callable
 
 import qrcode
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import P115FileService
 from .offline import OfflineDownloadService

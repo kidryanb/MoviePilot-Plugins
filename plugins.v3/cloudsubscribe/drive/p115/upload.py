@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 import requests
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import P115DirectoryReader, P115FileService
 from ...core import OwnerDelegator

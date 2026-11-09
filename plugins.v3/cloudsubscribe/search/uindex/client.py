@@ -4,7 +4,7 @@ import threading
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, unquote
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .security import UIndexSecurity, UIndexSecurityError
 from ..magnet import _HASH_REGEX, _MAGNET_REGEX, parse_size_str

@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .scanner import SearchSourceRegistry
 from ..core.search import SearchRegistry

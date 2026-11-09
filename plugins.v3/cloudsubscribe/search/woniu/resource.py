@@ -7,7 +7,7 @@ import threading
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urlparse
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import WoniuClient, WoniuError
 from ..magnet import parse_size_str

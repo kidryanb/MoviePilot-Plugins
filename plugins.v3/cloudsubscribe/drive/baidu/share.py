@@ -10,7 +10,7 @@ from threading import RLock
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import wait_task
 from ..common import safe_int, should_skip_season_dir

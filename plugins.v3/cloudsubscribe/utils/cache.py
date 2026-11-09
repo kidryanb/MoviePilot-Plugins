@@ -6,7 +6,7 @@ from contextlib import nullcontext
 from hashlib import sha256
 from typing import Any, Callable, Optional, Sequence
 
-from app.core.cache import TTLCache
+from app.sdk.cache import TTLCache
 
 
 def _cache_identity(value: Any) -> str:

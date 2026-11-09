@@ -6,12 +6,13 @@ from io import BytesIO
 from typing import Any, Dict
 
 import qrcode.image.svg
-from app.log import logger
+from app.sdk.logging import logger
 
 import qrcode
 from ..cloud import CloudDriveCapability
 from ..delegation import OwnerDelegator
 from ...drive.scanner import DriverRegistry
+from ..coexist import COOKIE_SOURCE_KEY, qrcode_blocked
 
 
 class QRCodeService(OwnerDelegator):
@@ -52,6 +53,11 @@ class QRCodeService(OwnerDelegator):
     def api_vue_get_qrcode(
             self, provider: str = "115", client_type: str = "alipaymini"
     ) -> dict:
+        blocked = qrcode_blocked(
+            provider, {COOKIE_SOURCE_KEY: getattr(self, "_p115_cookie_source", None)}
+        )
+        if blocked:
+            return {"success": False, "message": blocked}
         try:
             key, service, definition = self._qrcode_service(provider)
             data = dict(service.create_qrcode_login(client_type) or {})

@@ -11,14 +11,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 from uuid import uuid4
 
 import pytz
-from app.core.config import settings
-from app.core.metainfo import MetaInfo
+from app.sdk.config import settings
+from app.sdk.media import MetaInfo
 from app.db import SessionFactory
 from app.db.models.subscribe import Subscribe
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from ...core import CloudDriveCapability, OwnerDelegator
 from ...core.media import (

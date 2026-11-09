@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.db import SessionFactory
 from app.db.downloadhistory_oper import DownloadHistoryOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from ...core import OwnerDelegator

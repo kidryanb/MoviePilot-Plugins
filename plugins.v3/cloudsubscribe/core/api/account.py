@@ -9,7 +9,7 @@ from threading import RLock
 from typing import Any, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from app.log import logger
+from app.sdk.logging import logger
 from fastapi import Request
 
 from .page import clear_ui_options_cache

@@ -8,10 +8,10 @@ from app.db.site_oper import SiteOper
 from app.db.subscribe_oper import SubscribeOper
 
 try:
-    from app.helper.mediaserver import MediaServerHelper
+    from app.sdk.services import MediaServerHelper
 except ImportError:
     from app.application.mediaserver import MediaServerHelper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from .media import tmdb_id_of
@@ -128,7 +128,7 @@ class UIConfig:
             ],
             "anime_pack_preferred": True,
             "offline_timeout": 30,
-            "strm_generate_enabled": True,
+            "strm_generate_enabled": False,
             "nfo_scrape_enabled": False,
             "image_scrape_enabled": False,
             "strm_base_url": "http://172.17.0.1:9527",
@@ -166,12 +166,12 @@ class UIConfig:
             "search_circuit_breaker_enabled": True,
             "search_circuit_breaker_threshold": 3,
             "search_circuit_breaker_cooldown": 60,
-            "subscribe_filter_mode": "exclude",
+            "subscribe_filter_mode": "include",
             "exclude_subscribes": [],
             "include_subscribes": [],
             "block_system_subscribe": False,
             "takeover_new_subscribes": False,
-            "platform_download_policy": "block",
+            "platform_download_policy": "allow",
             "block_start_time": "18:00",
             "block_end_time": "23:59",
             "transfer_task_batch_size": 50,
@@ -187,6 +187,9 @@ class UIConfig:
             "skip_other_season_dirs": True,
             "enable_cloud_upgrade": False,
             "enable_pt_upgrade": False,
+            "preferred_drives": ["115", "quark"],
+            "same_cloud_first": True,
+            "p115_cookie_source": "strm_helper",
             "upgrade_mode": "largest",
             "upgrade_subscribe_ids": [],
             "local_resource_path": "",

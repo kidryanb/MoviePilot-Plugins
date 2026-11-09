@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlencode
 
 import requests
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..common import DriveRateLimiter, format_size, safe_int
 

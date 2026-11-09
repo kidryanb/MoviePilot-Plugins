@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
-from app.core.config import settings
-from app.core.metainfo import MetaInfo
+from app.sdk.config import settings
+from app.sdk.media import MetaInfo
 from torf import Magnet, Torrent, TorfError
 
 from .cache import create_platform_ttl_cache

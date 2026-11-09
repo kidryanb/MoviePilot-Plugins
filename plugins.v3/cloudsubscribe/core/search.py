@@ -18,7 +18,7 @@ from typing import (
     runtime_checkable,
 )
 
-from app.log import logger
+from app.sdk.logging import logger
 
 
 class SearchCapability(str, Enum):

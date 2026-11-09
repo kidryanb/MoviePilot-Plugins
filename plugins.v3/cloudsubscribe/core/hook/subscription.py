@@ -7,7 +7,7 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from app.chain.subscribe import SubscribeChain
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 
 from .. import OwnerDelegator
 
@@ -186,8 +186,15 @@ class SubscriptionSearchHook(OwnerDelegator):
         return wrapper
 
     def _is_platform_search_blocked(self) -> bool:
+        """
+        判断接管期内是否拦截平台搜索。
+
+        平台搜索无法区分属于哪个订阅；指定模式只接管勾选的订阅，
+        因此不做全局拦截，避免其他订阅（以及下载完成自动上传）拿不到下载任务。
+        """
         return (
                 self._platform_download_policy == "block"
+                and self._subscribe_filter_mode != "include"
                 and self._is_takeover_active()
         )
 

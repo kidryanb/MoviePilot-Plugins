@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import Any, Dict, List
 
-from app.core.cache import TTLCache
+from app.sdk.cache import TTLCache
 
 from ..common import (
     CloudDriveFileServiceBase,

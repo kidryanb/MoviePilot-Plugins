@@ -10,7 +10,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urljoin, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .action import ServerActionProtocol, ServerActionResponse
 from .captcha import HDHiveCaptchaError, HDHiveCaptchaSolver

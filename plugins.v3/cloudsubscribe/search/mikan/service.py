@@ -4,7 +4,7 @@ import time
 from threading import RLock
 from typing import Any, Dict, List, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import MikanClient, MikanClientError
 from ..magnet import media_titles, normalize_magnets

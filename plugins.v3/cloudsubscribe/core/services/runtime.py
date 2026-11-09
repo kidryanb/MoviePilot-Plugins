@@ -7,8 +7,8 @@ from threading import Event as ThreadEvent, Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
-from app.core.config import global_vars, settings
-from app.log import logger
+from app.sdk.config import global_vars, settings
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -1117,7 +1117,21 @@ class SyncRuntimeService(OwnerDelegator):
             # 安全停止前核查
             if self._sync_handler and pending_keys and hasattr(self._sync_handler, "monitor_offline_strm_tasks"):
                 try:
-                    self._sync_handler.monitor_offline_strm_tasks(force=True, pending_keys=pending_keys)
+                    # 按记录所属网盘分组处理（同盘优先）
+                    drive_of = {
+                        str(item.get("pending_key")): str(item.get("drive_key") or "")
+                        for item in self._sync_handler.get_pending_finalize_tasks()
+                    }
+                    by_drive: Dict[str, set] = {}
+                    for pending_key in pending_keys:
+                        by_drive.setdefault(drive_of.get(str(pending_key), ""), set()).add(pending_key)
+                    scope = getattr(self._sync_handler, "drive_scope", None)
+                    for drive_key, keys in by_drive.items():
+                        if callable(scope):
+                            with scope(drive_key):
+                                self._sync_handler.monitor_offline_strm_tasks(force=True, pending_keys=keys)
+                        else:
+                            self._sync_handler.monitor_offline_strm_tasks(force=True, pending_keys=keys)
                 except Exception as monitor_err:
                     logger.warning(f"安全停止前处理已有文件异常：{monitor_err}")
             remaining_keys = self._postprocessing_pending_keys(task_snapshot)
@@ -1218,9 +1232,17 @@ class SyncRuntimeService(OwnerDelegator):
             shared_kwargs["offline_tasks"] = snapshot.get("tasks") or []
             shared_kwargs["offline_tasks_valid"] = bool(snapshot.get("refresh_ok"))
 
+        def monitor_group(group_kwargs: Dict[str, Any], drive_key: str) -> Dict[str, Any]:
+            # 同盘优先：后处理在记录所属网盘的作用域里执行
+            scope = getattr(sync_handler, "drive_scope", None)
+            if not callable(scope):
+                return sync_handler.monitor_offline_strm_tasks(**group_kwargs)
+            with scope(drive_key):
+                return sync_handler.monitor_offline_strm_tasks(**group_kwargs)
+
         if len(groups) == 1:
             shared_kwargs["pending_keys"] = set(groups[0]["pending_keys"])
-            return sync_handler.monitor_offline_strm_tasks(**shared_kwargs)
+            return monitor_group(shared_kwargs, groups[0].get("drive_key") or "")
 
         policy = getattr(getattr(self, "_cloud_drive", None), "policy", None)
         worker_count = min(
@@ -1237,11 +1259,12 @@ class SyncRuntimeService(OwnerDelegator):
         ) as executor:
             futures = {
                 executor.submit(
-                    sync_handler.monitor_offline_strm_tasks,
-                    **{
+                    monitor_group,
+                    {
                         **shared_kwargs,
                         "pending_keys": set(group["pending_keys"]),
                     },
+                    group.get("drive_key") or "",
                 ): group
                 for group in groups
             }

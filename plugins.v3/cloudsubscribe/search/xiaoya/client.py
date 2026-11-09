@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ...utils.http_client import requests, request_error_summary
 

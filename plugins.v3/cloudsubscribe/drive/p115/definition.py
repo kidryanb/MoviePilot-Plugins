@@ -75,12 +75,25 @@ class P115DriverDefinition(DriverDefinition):
                         cols=12,
                     ),
                     FieldSpec(
+                        key="p115_cookie_source",
+                        label="115 Cookie 来源",
+                        type="select",
+                        default="strm_helper",
+                        items=[
+                            {"title": "复用 P115StrmHelper（推荐）", "value": "strm_helper"},
+                            {"title": "本插件自己登录", "value": "own"},
+                        ],
+                        hint="复用时只读取 P115StrmHelper 的 Cookie，不扫码，避免把它和「下载完成自动上传」挤下线。",
+                        cols=12,
+                    ),
+                    FieldSpec(
                         key="cookies",
                         label="115 Cookie",
                         type="password",
                         default="",
-                        hint="可直接填写或点击右侧二维码按钮扫码登录",
+                        hint="可直接填写或点击右侧二维码按钮扫码登录。扫码请选与 P115StrmHelper 不同的客户端类型，否则会把它挤下线。",
                         scan_provider="115",
+                        show_condition="config.p115_cookie_source === 'own'",
                         cols=12,
                     ),
                     FieldSpec(
@@ -90,7 +103,7 @@ class P115DriverDefinition(DriverDefinition):
                         placeholder="/",
                         default="/",
                         drive_provider="115",
-                        hint="115 分享和离线任务先保存到此路径，跨盘临时目录也创建在此路径下。",
+                        hint="115 分享和离线任务先保存到此路径，跨盘临时目录也创建在此路径下。不要与「下载完成自动上传」的上传目录重叠，重叠时 115 会被停用。",
                         cols=6,
                     ),
                     FieldSpec(
@@ -198,6 +211,9 @@ class P115DriverDefinition(DriverDefinition):
     def create_client(cls, config: Dict[str, Any], context: Optional[Any] = None) -> Any:
         ctx = context or {}
         cookies = str(config.get("_cookies") or config.get("cookies") or "").strip()
+        if not cookies:
+            # 空 Cookie 不注册 115，避免把未登录的盘当成可用目标；扫码走临时服务。
+            return None
         share_cache_ttl = int(config.get("_search_cache_ttl_minutes") or 30)
         return P115ClientManager(
             cookies=cookies,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from threading import RLock
 from typing import Any, Dict, Mapping
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .database import CloudSubscribeDatabaseManager, CloudSubscribeRepositories
 

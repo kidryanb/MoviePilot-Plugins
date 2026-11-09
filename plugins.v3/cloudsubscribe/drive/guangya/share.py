@@ -7,7 +7,7 @@ from threading import RLock
 from typing import Any, Dict, Iterable
 from urllib.parse import parse_qs, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import cloud_file
 from ..common import iter_transfer_batches, safe_int

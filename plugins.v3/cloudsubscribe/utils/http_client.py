@@ -10,7 +10,7 @@ from functools import partial
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 from curl_cffi import requests
 
 TRANSIENT_REQUEST_EXCEPTIONS = (

@@ -8,7 +8,7 @@
 import copy
 from typing import Any, Dict, List, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .definitions import CheckinDefinition
 from ..drive.scanner import get_driver_definitions

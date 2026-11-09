@@ -9,7 +9,7 @@ from threading import RLock
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..common import iter_transfer_batches, should_skip_season_dir
 from ...core.cloud import ShareLinkStatus

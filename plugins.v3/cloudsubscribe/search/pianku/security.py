@@ -7,7 +7,7 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
-from app.log import logger
+from app.sdk.logging import logger
 from curl_cffi import requests
 
 from ...utils.cache import create_platform_ttl_cache

@@ -8,7 +8,7 @@ from threading import RLock
 from typing import Any, Callable, Dict, Optional
 
 import requests
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from ..common import DriveRateLimiter
 

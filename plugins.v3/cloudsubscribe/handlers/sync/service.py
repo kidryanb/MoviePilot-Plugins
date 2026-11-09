@@ -12,8 +12,8 @@ from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_co
 from pathlib import Path, PurePosixPath
 from typing import List, Dict, Any, Set, Optional, Callable, Tuple, Mapping, Iterable
 
-from app.core.config import global_vars
-from app.core.context import MediaInfo
+from app.sdk.config import global_vars
+from app.sdk.media import MediaInfo
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 
@@ -25,11 +25,11 @@ except Exception:
     except Exception:
         DirectoryHelper = None
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType, NotificationType
 
 try:
-    from app.utils.http import RequestUtils
+    from app.sdk.network import RequestUtils
 except Exception:
     try:
         from app.adapters.network.http import RequestUtils
@@ -47,6 +47,7 @@ from .notify import SyncNotificationService
 from .platform_history import PlatformHistoryService
 from .postprocess import PostprocessService
 from .pt_upgrade import PtUpgradeService
+from .drive_scope import DriveScopeMixin, install_scoped_attributes, run_in_current_scope
 from .resources import ResourceTransferService
 from .retry import HistoryRetryService
 from .rule_scoring import UpgradeRuleScoringService
@@ -97,7 +98,7 @@ _COMPONENT_TYPES = (
 )
 
 
-class SyncHandler:
+class SyncHandler(DriveScopeMixin):
     """同步处理器"""
 
     _OFFLINE_PENDING_KEY = "pending_offline_strm"
@@ -373,7 +374,7 @@ class SyncHandler:
                 self._cloud_drive.key, self._CLOUD_MEDIA_ROOT
             )
 
-        self._strm_generate_enabled = bool(_get_val("strm_generate_enabled", True))
+        self._strm_generate_enabled = bool(_get_val("strm_generate_enabled", False))
         self._nfo_scrape_enabled = bool(_get_val("nfo_scrape_enabled", False))
         self._image_scrape_enabled = bool(_get_val("image_scrape_enabled", False))
         self._platform_transfer_history_enabled = bool(
@@ -495,6 +496,11 @@ class SyncHandler:
         self._baseline_media_server_cache = create_platform_ttl_cache(
             "sync:baseline_media_server", self, maxsize=256,
             ttl=self._RUNTIME_CACHE_TTL,
+        )
+        # M1 同盘优先：为默认盘之外的已登录网盘准备一套转存属性，按分享类型切换。
+        self._build_drive_profiles(
+            list(getattr(plugin, "_same_cloud_drive_keys", None) or []) if plugin else [],
+            configured_batch_size,
         )
 
     def append_history_records(
@@ -905,7 +911,8 @@ class SyncHandler:
                     thread_name_prefix="cloudsubscribe-file-download",
                 )
                 futures = {
-                    executor.submit(transfer_one, item): str(item["file"]["id"])
+                    # 工作线程沿用当前目标网盘作用域
+                    executor.submit(run_in_current_scope(transfer_one, item)): str(item["file"]["id"])
                     for item in selected_items
                 }
                 try:
@@ -2084,6 +2091,8 @@ class SyncHandler:
             "pending_key": pending_key,
             "task_type": task_type,
             "task_id": pending_task_id,
+            # 后处理按记录所属网盘执行；空值表示默认网盘（兼容旧记录）
+            "drive_key": self.scoped_drive_key() or str(current.get("drive_key") or ""),
             "source_sha1": source_hash,
             "share_url": share_url,
             "cloud_dir": cloud_dir,
@@ -2957,3 +2966,6 @@ class SyncHandler:
                 logger.debug(traceback.format_exc())
 
         return completed_count
+
+
+install_scoped_attributes(SyncHandler)

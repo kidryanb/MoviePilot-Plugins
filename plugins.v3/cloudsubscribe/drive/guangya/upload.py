@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import GuangyaFileService
 from .oss import GuangyaOssClient, OssStsCredentials

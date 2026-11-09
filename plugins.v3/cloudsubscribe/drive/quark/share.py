@@ -7,7 +7,7 @@ import time
 from threading import RLock
 from typing import Any, Dict, Iterable
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .files import cloud_file, list_data
 from ..common import safe_int, should_skip_season_dir

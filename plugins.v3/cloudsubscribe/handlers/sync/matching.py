@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Dict, List
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 
 from ...core import OwnerDelegator

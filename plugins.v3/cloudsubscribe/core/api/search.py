@@ -6,11 +6,11 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from app.core.metainfo import MetaInfo
-from app.log import logger
+from app.sdk.media import MetaInfo
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from .page import _platform_image_url, clear_ui_options_cache
 from .. import CloudDriveCapability, OwnerDelegator, SearchCapability, build_resolve_kwargs

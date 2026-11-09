@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Mapping, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from .resource import XiaoyaResourceService
 from ..types import (

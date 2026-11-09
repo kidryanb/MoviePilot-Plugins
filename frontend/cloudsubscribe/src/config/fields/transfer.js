@@ -19,6 +19,7 @@ export function createTransferSection(options) {
               { title: "排除所选订阅", value: "exclude" },
               { title: "仅处理所选订阅", value: "include" },
             ],
+            hint: "默认仅处理所选订阅：没勾选的订阅照常走下载器，由「下载完成自动上传」上传。",
             cols: 4,
           },
           {

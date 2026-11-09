@@ -7,7 +7,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urljoin, urlsplit
 
-from app.log import logger
+from app.sdk.logging import logger
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature

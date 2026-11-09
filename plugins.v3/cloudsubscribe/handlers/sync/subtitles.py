@@ -10,7 +10,7 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from app.log import logger
+from app.sdk.logging import logger
 from app.modules.filemanager.transhandler import TransHandler
 from app.schemas.file import FileItem
 

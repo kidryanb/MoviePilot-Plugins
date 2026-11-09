@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import unicodedata
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..types import resource_type_from_url
 from ...utils.http_client import (

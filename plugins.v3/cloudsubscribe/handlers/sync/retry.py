@@ -7,9 +7,9 @@ from threading import Lock, Thread
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from app.core.metainfo import MetaInfo
+from app.sdk.media import MetaInfo
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from ...core import CloudDriveCapability, CloudFile, OwnerDelegator
@@ -88,6 +88,13 @@ class HistoryRetryService(OwnerDelegator):
         return {"status": "处理中"}
 
     def _run_history_retry(
+            self, key: str, record_time: str, share_url: str, file_name: str
+    ) -> None:
+        # 同盘优先：重试落到分享所属的网盘，与首次转存一致
+        with self.drive_scope_for_url(share_url):
+            self._run_history_retry_in_scope(key, record_time, share_url, file_name)
+
+    def _run_history_retry_in_scope(
             self, key: str, record_time: str, share_url: str, file_name: str
     ) -> None:
         try:

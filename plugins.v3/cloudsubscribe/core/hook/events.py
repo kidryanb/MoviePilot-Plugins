@@ -5,9 +5,9 @@ import re
 from threading import Thread
 from typing import Any, Dict, Optional, Tuple
 
-from app.core.event import Event
+from app.sdk.events import Event
 from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import Notification
 from app.schemas.event import ResourceDownloadEventData
 from app.schemas.types import MediaType, NotificationType

@@ -7,7 +7,7 @@ import inspect
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
-from app.log import logger
+from app.sdk.logging import logger
 
 from ..core.definitions import DriverDefinition, FieldSpec, GroupSpec
 

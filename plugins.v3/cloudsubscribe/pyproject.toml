@@ -1,0 +1,10 @@
+[project]
+name = "moviepilot-plugin-cloudsubscribe"
+dynamic = ["version"]
+requires-python = ">=3.14"
+dependencies = [
+    "p115client>=0.0.9.6.5.1",
+    "torf>=4.3.1",
+    "curl_cffi>=0.15.0",
+    "numpy>=2.0.0",
+]

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Iterator, Optional
 
 from app.chain.recommend import RecommendChain
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas.types import MediaType
 
 from ...core.subscribe import MediaCandidate, SubscribeContext, SubscribeProvider

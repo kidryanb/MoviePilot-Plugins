@@ -29,14 +29,16 @@
   },
   "CloudSubscribe": {
     "name": "网盘订阅助手",
-    "description": "Fork 起点：自 odomu/MoviePilot-Plugins@8764620（上游 v1.7.7）原样引入。代码仍是 v2 插件形态，尚未对齐 MP V3 SDK，还不能当作可启用版本。",
+    "description": "网盘订阅助手 fork：已适配 MP V3；同盘优先，115 分享转存到 115、夸克分享转存到夸克；默认只接管勾选的订阅，与「下载完成自动上传」共存。",
     "labels": "订阅,网盘,转存,搜索",
-    "version": "0.0.1-fork",
+    "version": "0.2.0",
     "icon": "cloud.png",
     "author": "odomu",
     "level": 1,
     "system_version": ">=3.0.0",
     "history": {
+      "v0.2.0": "同盘优先（M1）：新增「转存网盘（兜底顺序）」与「同盘优先」开关，旧的 cloud_drive 仍可读取。订阅搜索不再只搜当前网盘的分享类型；115 分享转存到 115 的转存路径，夸克分享转存到夸克的转存路径，未登录的盘不会被写入。只登录夸克时默认盘自动改为夸克。后处理队列、失败重试按记录所属网盘执行。洗版仍固定在默认盘，夸克暂不生成 STRM（分别在 M2、M3 处理）。",
+      "v0.1.0": "适配 MP V3：入口与常用导入改为 app.sdk，依赖改用 pyproject.toml，附带构建好的配置页。与「下载完成自动上传」共存：PT 洗版上传固定关闭；新装默认只接管勾选订阅、不拦截平台下载、不写 115 STRM；115 Cookie 默认只读复用 P115StrmHelper，复用时禁止扫码；115 转存目录与上传目录重叠时停用 115；空 Cookie 不再注册 115。",
       "v0.0.1-fork": "引入上游 876462067593d4fc2f7bc038f2f73d3eaf099b76（v1.7.7）的插件与前端源码，保留 GPL-3.0。只把 plugin_version 标为 0.0.1-fork 并注明来源，未改转存、搜索或订阅逻辑。改造清单见 docs/cloudsubscribe-fork-plan.md。"
     }
   }

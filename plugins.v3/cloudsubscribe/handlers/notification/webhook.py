@@ -3,8 +3,8 @@ from datetime import datetime
 from typing import Any, Dict, List
 from urllib.parse import urlsplit
 
-from app.log import logger
-from app.utils.http import RequestUtils
+from app.sdk.logging import logger
+from app.sdk.network import RequestUtils
 
 
 class WebhookHandler:

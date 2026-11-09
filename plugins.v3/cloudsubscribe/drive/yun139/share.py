@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote, unquote
 
 from Crypto.Cipher import AES
-from app.log import logger
+from app.sdk.logging import logger
 
 from .client import Yun139ApiError
 from ..common import safe_int, should_skip_season_dir

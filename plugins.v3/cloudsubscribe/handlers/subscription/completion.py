@@ -7,12 +7,12 @@ from threading import RLock
 from typing import Any, Callable, List, Optional
 
 from app.chain.subscribe import SubscribeChain
-from app.core.metainfo import MetaInfo
+from app.sdk.media import MetaInfo
 from app.db import SessionFactory
 from app.db.subscribe_oper import SubscribeOper
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.message import TemplateHelper
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType, SystemConfigKey
 

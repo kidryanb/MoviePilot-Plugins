@@ -6,10 +6,10 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.db import SessionFactory
-from app.log import logger
+from app.sdk.logging import logger
 from app.schemas import MediaInfo
 from app.schemas.types import MediaType
-from app.utils.string import StringUtils
+from app.sdk.utilities import StringUtils
 
 from .utils import extract_ed2k_filename
 from ...core import OwnerDelegator
@@ -772,6 +772,11 @@ class UpgradeService(OwnerDelegator):
         )
 
     def _upgrade_scan_single_sub(self, subscribe):
+        """网盘洗版扫描固定在默认盘执行（按实际落盘切换属于 M2）。"""
+        with self.no_drive_routing():
+            return self._upgrade_scan_single_sub_default_drive(subscribe)
+
+    def _upgrade_scan_single_sub_default_drive(self, subscribe):
         """按统一基线刷新单个订阅的 episode_priority。"""
         from app.db.subscribe_oper import SubscribeOper
 
@@ -1021,7 +1026,7 @@ class UpgradeService(OwnerDelegator):
         return targets
 
     def _media_server_services(self) -> Dict[str, Any]:
-        from app.helper.mediaserver import MediaServerHelper
+        from app.sdk.services import MediaServerHelper
 
         services = MediaServerHelper().get_services() or {}
         return {

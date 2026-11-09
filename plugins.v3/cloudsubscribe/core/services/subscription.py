@@ -3,7 +3,7 @@
 import datetime
 
 import pytz
-from app.core.config import settings
+from app.sdk.config import settings
 
 from ..media import is_subscribe_best_version
 from ...core import OwnerDelegator

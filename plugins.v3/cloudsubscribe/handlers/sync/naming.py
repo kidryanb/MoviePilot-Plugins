@@ -4,9 +4,9 @@ import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.core.context import MediaInfo
-from app.core.metainfo import MetaInfo
-from app.log import logger
+from app.sdk.media import MediaInfo
+from app.sdk.media import MetaInfo
+from app.sdk.logging import logger
 from app.modules.filemanager import FileManagerModule
 from app.modules.filemanager.transhandler import TransHandler
 from app.schemas.types import MediaType
