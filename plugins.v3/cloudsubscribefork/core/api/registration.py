@@ -91,6 +91,13 @@ class MoviePilotRegistration(OwnerDelegator):
                 "auth": "apikey",
             },
             {
+                "path": "/relay/link",
+                "endpoint": self.api_relay_link,
+                "methods": ["GET"],
+                "auth": "apikey",
+                "summary": "服务器中转取链",
+            },
+            {
                 "path": "/strm/port_check",
                 "endpoint": self.api_strm_port_check,
                 "methods": ["GET"],

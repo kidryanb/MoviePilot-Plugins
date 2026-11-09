@@ -81,6 +81,42 @@ class StrmGenerator:
             "?/{file_name}"
         )
 
+    #: 服务器中转短链的签名变量
+    RELAY_SIGNATURE_VARIABLE = "relay_sig"
+
+    @staticmethod
+    def relay_signature(secret: Any, drive_key: Any, identifier: Any) -> str:
+        """
+        服务器中转短链签名：HMAC-SHA256(密钥, "网盘:标识") 的前 32 位十六进制。
+
+        STRM 是长期文件，签名不带过期时间；没有密钥就无法伪造或改动链接里的文件标识。
+        """
+        import hashlib
+        import hmac
+
+        key = str(secret or "").encode("utf-8")
+        if not key:
+            return ""
+        message = f"{str(drive_key or '').strip().lower()}:{str(identifier or '').strip()}"
+        return hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+    @classmethod
+    def relay_template(cls, drive_key: str, identifier_variable: str = "") -> str:
+        """服务器中转短链模板：``{base_url}/quark/{file_id}/{relay_sig}?/{file_name}``。"""
+        key = str(drive_key or "").strip().lower()
+        if not identifier_variable or not re.fullmatch(r"[a-z0-9_-]+", key):
+            return ""
+        return (
+            f"{{base_url}}/{key}/{{{identifier_variable}}}/{{{cls.RELAY_SIGNATURE_VARIABLE}}}"
+            "?/{file_name}"
+        )
+
+    @staticmethod
+    def relay_base_url(value: Any) -> str:
+        """服务器中转地址（http/https，去掉末尾斜杠）；格式不对时返回空串。"""
+        text = str(value or "").strip().rstrip("/")
+        return text if re.match(r"^https?://[^/\s]+", text) else ""
+
     @classmethod
     def drive_proxy_template(
             cls, drive_key: str, identifier_variable: str = "", route: Any = ""

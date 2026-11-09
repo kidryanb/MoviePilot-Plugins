@@ -125,6 +125,43 @@ class StrmProxyApi(OwnerDelegator):
         config = getattr(self, "_applied_config", None) or {}
         return bool(config.get("strm_proxy_enabled", False))
 
+    def api_relay_link(self, drive: str = "quark", file_id: str = "", sig: str = "") -> Dict[str, Any]:
+        """
+        服务器中转取链（quark-relay 调用，MP API Key 鉴权）。
+
+        再校验一次短链签名，只给签名正确的文件取直链；返回直链和下载请求头（含 Cookie），
+        由服务器自己去网盘拉流，播放流量不经过本机。
+        """
+        config = getattr(self, "_applied_config", None) or {}
+        secret = str(config.get("strm_relay_secret") or "")
+        if not secret or not StrmGenerator.relay_base_url(config.get("strm_relay_url")):
+            return {"success": False, "message": "未配置服务器中转"}
+        drive_key = str(drive or "").strip().lower()
+        identifier = str(file_id or "").strip()
+        expected = StrmGenerator.relay_signature(secret, drive_key, identifier)
+        import hmac as _hmac
+
+        if not identifier or not _hmac.compare_digest(expected, str(sig or "").strip().lower()):
+            return {"success": False, "message": "签名无效"}
+        provider = self._registered_drive(drive_key)
+        downloader = self._file_downloader(provider) if provider else None
+        if not downloader:
+            return {"success": False, "message": f"网盘 {drive_key} 未登录或不支持取链"}
+        variable = self._proxy_identifier(provider) or "file_id"
+        file_item = CloudFile(
+            id=identifier, name=identifier, is_directory=False,
+            playback_values={variable: identifier},
+        )
+        try:
+            url, headers = downloader.resolve_download_link(file_item)
+        except Exception as error:
+            logger.warning(f"服务器中转取链失败：{drive_key} {identifier} - {type(error).__name__}")
+            return {"success": False, "message": "取链失败"}
+        if not url:
+            return {"success": False, "message": "网盘未返回直链"}
+        logger.info(f"服务器中转取链：{drive_key} {identifier}")
+        return {"success": True, "data": {"url": str(url), "headers": dict(headers or {})}}
+
     def api_strm_port_check(self, port: int = 0) -> Dict[str, Any]:
         """配置页即时检测：端口是否可用、是否为本插件监听占用。"""
         result = check_port(port)

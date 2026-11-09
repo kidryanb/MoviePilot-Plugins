@@ -178,11 +178,26 @@ class DriveScopeMixin:
         from ...utils.strm import StrmGenerator, StrmTemplateError
 
         reference = provider.require(CloudDriveCapability.PLAYBACK_REFERENCE)
+        identifier = StrmGenerator.proxy_identifier_variable(reference)
+        variables = {
+            *getattr(reference, "template_variables", ()),
+            StrmGenerator.RELAY_SIGNATURE_VARIABLE,
+        }
+        relay_url = settings.get("relay_url") or ""
+        if relay_url and settings.get("relay_secret"):
+            # 服务器中转：STRM 指向服务器上的 quark-relay，不经过本机播放代理
+            relay_template = StrmGenerator.relay_template(key, identifier)
+            if relay_template:
+                try:
+                    return StrmGenerator(relay_url, relay_template, provider_variables=variables)
+                except StrmTemplateError as error:
+                    _log("error", f"{getattr(provider, 'name', key)} 的服务器中转 STRM 配置无效：{error}")
+                    return None
         template = StrmGenerator.drive_template(
             key,
             "",
             provider_variables=getattr(reference, "template_variables", ()),
-            identifier_variable=StrmGenerator.proxy_identifier_variable(reference),
+            identifier_variable=identifier,
             proxy_enabled=bool(settings.get("proxy_enabled")),
             route=settings.get("route", ""),
             is_default=False,
@@ -196,7 +211,7 @@ class DriveScopeMixin:
                     settings.get("base_url"), template, settings.get("port", 0)
                 ),
                 template,
-                provider_variables=getattr(reference, "template_variables", ()),
+                provider_variables=variables,
             )
         except StrmTemplateError as error:
             _log("error", f"{getattr(provider, 'name', key)} 的 STRM 配置无效：{error}")
