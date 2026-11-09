@@ -123,9 +123,9 @@ class CloudSubscribeFork(_PluginBase):
     # 插件版本
     plugin_version = "0.2.1"
     # 插件作者
-    plugin_author = "odomu"
+    plugin_author = "kidryanb"
     # 作者主页
-    author_url = "https://github.com/odomu"
+    author_url = "https://github.com/kidryanb"
     # 插件配置项ID前缀
     plugin_config_prefix = "cloudsubscribefork_"
     plugin_order = 21
