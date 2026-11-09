@@ -33,7 +33,7 @@
     "labels": "订阅,网盘,转存,搜索",
     "version": "0.2.1",
     "icon": "cloud.png",
-    "author": "odomu",
+    "author": "kidryanb,odomu",
     "level": 1,
     "system_version": ">=3.0.0",
     "history": {
