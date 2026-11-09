@@ -53,7 +53,7 @@ export function createTransferSection(options) {
             key: "cross_transfer_enabled",
             label: "跨盘资源自动转存",
             type: "switch",
-            hint: "目标网盘不一致时尝试秒传或中继转存",
+            hint: "已登录但不在转存网盘里的盘（如只登录不存片的夸克）搜到分享时，先存进该盘，再秒传或下载上传到默认转存网盘，最后删掉中转文件",
             cols: 4,
           },
           {

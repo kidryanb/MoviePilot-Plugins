@@ -256,12 +256,12 @@ MoviePilot 的订阅搜索由本插件接管，用已有多源（至少包括 Pa
 
 ### M2 跨盘与离线兜底、洗版、失败重试
 
-- [ ] 同盘未命中时，按 `preferred_drives` 调用现有 `CrossTransferTaskManager`（先秒传，再本地中继）
+- [x] 同盘未命中时，调用现有 `CrossTransferTaskManager` 转进默认转存网盘（先秒传，再本地中继）。登录了但不在 `preferred_drives` 里的盘作为中转来源，其分享类型并进订阅搜索（`CloudDriveManager.relay_drive_keys`）。来源盘必须有登录账号：分享只能先存进同类账号再下载上传
 - [ ] OpenList→115 作为单独的新兜底，默认关闭。上游没有对应模块，不要改 `CrossDriveTransfer` 去假装它已经存在
-- [ ] 磁力 / ed2k 只提交给有 `OFFLINE_DOWNLOAD` 的盘；夸克、阿里、UC、天翼不接收
-- [ ] `UpgradeService` 洗版时的删除和转存指向该订阅实际落过的盘，而不是永远的 `_cloud_drive`
-- [ ] `retry_history_record` 按记录里的 `target_drive_key` 重试，不因为和当前单一活动盘不同就拒绝
-- [ ] 风控（`transfer_risk_cooldown`）和离线超时（`offline_timeout`）在新仲裁下仍然中断整批，并留下可重试的历史
+- [x] 磁力 / ed2k 只提交给有 `OFFLINE_DOWNLOAD` 的盘；默认盘不能离线时交给第一个能离线的同盘目标（`route_offline`）
+- [x] 洗版时的查找、删除和转存指向该订阅实际落过的盘（`landed_drive_key` + `subscription_drive_scope`），期间不按分享类型切换
+- [x] `retry_history_record` 按记录里的 `target_drive_key` / `cloud_drive_key` 重试（`fixed_drive_scope`）；原目标盘未登录时给出可读原因
+- [x] 风控（`transfer_risk_cooldown`）和离线超时（`offline_timeout`）在新仲裁下仍然中断整批，并留下可重试的历史（冷却按来源盘记，夸克风控不影响 115）
 
 验收：
 

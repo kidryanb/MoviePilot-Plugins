@@ -40,6 +40,19 @@ scope = _load(f'{PKG}.handlers.sync.drive_scope', 'handlers/sync/drive_scope.py'
 
 Cap = cloud.CloudDriveCapability
 
+# drive_scope 在函数里按需导入 core.media 与 app.sdk.logging，这里给最小替身
+_media = types.ModuleType(f'{PKG}.core.media')
+_media.tmdb_id_of = lambda value: getattr(value, 'tmdbid', None)
+sys.modules[f'{PKG}.core.media'] = _media
+for _name in ('app', 'app.sdk'):
+    sys.modules.setdefault(_name, _package(_name) if _name not in sys.modules else sys.modules[_name])
+if 'app.sdk.logging' not in sys.modules:
+    _logging = types.ModuleType('app.sdk.logging')
+    _logging.logger = types.SimpleNamespace(
+        warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None,
+    )
+    sys.modules['app.sdk.logging'] = _logging
+
 
 class RoutingRulesTest(unittest.TestCase):
     def test_preferred_drives_keep_legacy_cloud_drive_first(self):
@@ -73,6 +86,44 @@ class RoutingRulesTest(unittest.TestCase):
         self.assertEqual(allowed, frozenset({'115', 'magnet', 'quark'}))
         self.assertEqual(routing.extend_resource_order(['115', 'ed2k'], ['quark']), ['115', 'ed2k', 'quark'])
         self.assertEqual(routing.extend_resource_order(['quark', '115'], ['quark']), ['quark', '115'])
+
+
+class M2RulesTest(unittest.TestCase):
+    def test_offline_link_detection(self):
+        self.assertTrue(routing.is_offline_link('magnet:?xt=urn:btih:abc'))
+        self.assertTrue(routing.is_offline_link(' ED2K://|file|a|1|h|/'))
+        self.assertFalse(routing.is_offline_link('https://pan.quark.cn/s/b'))
+
+    def test_offline_goes_to_first_offline_drive(self):
+        self.assertIsNone(routing.route_offline('115', True, []))
+        self.assertEqual(routing.route_offline('quark', False, ['115', 'p123']), '115')
+        self.assertIsNone(routing.route_offline('quark', False, []))
+
+    def test_relay_sources_exclude_targets(self):
+        self.assertEqual(
+            routing.relay_sources(['115', 'quark', 'alipan'], ['115', 'quark']), ['alipan'])
+        self.assertEqual(routing.relay_sources(['115', 'quark'], ['115']), ['quark'])
+
+    def test_landed_drive_picks_latest_successful_record(self):
+        records = [
+            {'tmdb_id': 1, 'type': '电视剧', 'season': 1, 'status': '成功',
+             'cloud_drive_key': '115', 'time': '2026-01-01 00:00:00'},
+            {'tmdb_id': 1, 'type': '电视剧', 'season': 1, 'status': '成功',
+             'cloud_drive_key': 'quark', 'time': '2026-02-01 00:00:00'},
+            {'tmdb_id': 1, 'type': '电视剧', 'season': 1, 'status': '失败',
+             'cloud_drive_key': '115', 'time': '2026-03-01 00:00:00'},
+            {'tmdb_id': 1, 'type': '电视剧', 'season': 2, 'status': '成功',
+             'cloud_drive_key': '115', 'time': '2026-04-01 00:00:00'},
+            {'tmdb_id': 2, 'type': '电影', 'status': '成功', 'transfer_mode': 'cross',
+             'cloud_drive_key': '115', 'source_drive_key': 'quark',
+             'target_drive_key': '115', 'time': '2026-01-01 00:00:00'},
+        ]
+        self.assertEqual(routing.landed_drive_key(records, 1, season=1), 'quark')
+        self.assertEqual(routing.landed_drive_key(records, 1, season=2), '115')
+        self.assertIsNone(routing.landed_drive_key(records, 1, season=3))
+        self.assertEqual(routing.landed_drive_key(records, 2, is_movie=True), '115')
+        self.assertIsNone(routing.landed_drive_key(records, 2, is_movie=False))
+        self.assertIsNone(routing.landed_drive_key(records, None, title=''))
 
 
 class FakeService:
@@ -201,6 +252,36 @@ class DriveScopeTest(unittest.TestCase):
                 ).result()
         self.assertEqual(seen, {'other': '115', 'worker': 'quark'})
 
+    def test_magnet_goes_to_offline_drive_only(self):
+        h = Handler(self.quark, FakeRegistry(self.p115, self.quark), {})
+        h._offline_download = None
+        h._build_drive_profiles(['115'], 50)
+        with h.drive_scope_for_url('magnet:?xt=urn:btih:abc') as key:
+            self.assertEqual(key, '115')
+            self.assertIsNotNone(h._offline_download)
+        # 默认盘能离线时留在默认盘
+        self.handler._offline_download = self.p115.require(Cap.OFFLINE_DOWNLOAD)
+        with self.handler.drive_scope_for_url('magnet:?xt=urn:btih:abc') as key:
+            self.assertIsNone(key)
+
+    def test_subscription_scope_uses_landed_drive_and_pins_it(self):
+        h = self.handler
+        h._get_data = lambda name: [
+            {'tmdb_id': 7, 'type': '电视剧', 'season': 1, 'status': '成功',
+             'cloud_drive_key': 'quark', 'time': '2026-01-01 00:00:00'},
+        ]
+        sub = types.SimpleNamespace(tmdbid=7, name='剧', season=1, type='电视剧')
+        with h.subscription_drive_scope(sub) as key:
+            self.assertEqual(key, 'quark')
+            self.assertIs(h._cloud_drive, self.quark)
+            # 洗版期间 115 分享不再切回 115，交给跨盘转进夸克
+            with h.drive_scope_for_url('https://115.com/s/a'):
+                self.assertIs(h._cloud_drive, self.quark)
+        other = types.SimpleNamespace(tmdbid=8, name='新剧', season=1, type='电视剧')
+        with h.subscription_drive_scope(other) as key:
+            self.assertIsNone(key)
+            self.assertIs(h._cloud_drive, self.p115)
+
     def test_unknown_or_unready_drive_is_ignored(self):
         h = self.handler
         with h.drive_scope('baidu') as key:
@@ -234,9 +315,19 @@ class WiringTest(unittest.TestCase):
         self.assertIn('"drive_key": drive_key', self.read('handlers/sync/postprocess.py'))
         self.assertIn('monitor_group', self.read('core/services/runtime.py'))
 
-    def test_upgrade_stays_on_default_drive(self):
-        self.assertIn('with self.no_drive_routing():', self.read('handlers/sync/television.py'))
-        self.assertIn('with self.no_drive_routing():', self.read('handlers/sync/upgrade.py'))
+    def test_upgrade_and_retry_follow_landed_drive(self):
+        self.assertIn('with self.subscription_drive_scope(subscribe):', self.read('handlers/sync/television.py'))
+        self.assertIn('with self.subscription_drive_scope(subscribe):', self.read('handlers/sync/upgrade.py'))
+        self.assertIn('self.subscription_drive_scope(subscribe) if upgrade_target_exists',
+                      self.read('handlers/sync/movie.py'))
+        retry = self.read('handlers/sync/retry.py')
+        self.assertIn('with self.fixed_drive_scope(target_key) as active:', retry)
+        self.assertNotIn('跨盘历史的目标网盘与当前转存网盘不一致', retry)
+
+    def test_relay_drives_join_search_types(self):
+        manager = self.read('core/drive_manager.py')
+        self.assertIn('relay_keys = self.relay_drive_keys()', manager)
+        self.assertIn('*self._plugin._same_cloud_drive_keys, *relay_keys', manager)
 
 
 if __name__ == '__main__':

@@ -102,7 +102,7 @@ export function createBasicSection(cloudDriveItems, options = {}) {
             type: "select",
             items: cloudDriveItems,
             multiple: true,
-            hint: "按选择顺序：第一个已登录的盘作为默认转存网盘。这是落盘的兜底顺序，不是搜索顺序。",
+            hint: "资源只会落在这里选的盘。按选择顺序，第一个已登录的盘作为默认转存网盘。登录了但没选的盘只当跨盘中转来源。",
             cols: 4,
           },
           {
