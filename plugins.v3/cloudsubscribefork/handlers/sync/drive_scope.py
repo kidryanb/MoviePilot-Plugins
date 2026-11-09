@@ -32,6 +32,17 @@ _ROUTING_DISABLED: contextvars.ContextVar[bool] = contextvars.ContextVar(
 
 _UNSET = object()
 
+
+def _log(level: str, message: str) -> None:
+    """按需导入宿主日志，离线测试里没有宿主时静默。"""
+    try:
+        from app.sdk.logging import logger
+    except Exception:
+        return
+    method = getattr(logger, level, None)
+    if callable(method):
+        method(message)
+
 #: 与目标网盘绑定的能力服务属性
 CAPABILITY_ATTRS = {
     "_cloud_auth": CloudDriveCapability.AUTHENTICATION,
@@ -56,6 +67,7 @@ SCOPED_ATTRS = (
     "_batch_size",
     "_strm_generate_enabled",
     "_strm_generator",
+    "_strm_by_helper",
     *CAPABILITY_ATTRS,
 )
 
@@ -143,11 +155,52 @@ class DriveScopeMixin:
                 configured_batch_size,
                 policy.max_batch_size if policy and policy.supports_batch else configured_batch_size,
             )
-            # 夸克 STRM/302 属于 M3；在那之前其他网盘不生成 STRM。
-            profile["_strm_generate_enabled"] = False
-            profile["_strm_generator"] = None
+            profile["_strm_generator"] = self._build_profile_strm_generator(provider)
+            profile["_strm_generate_enabled"] = profile["_strm_generator"] is not None
+            profile["_strm_by_helper"] = False
             profiles[key] = profile
         self.__dict__["_drive_profiles"] = profiles
+
+    def _build_profile_strm_generator(self, provider: Any) -> Any:
+        """
+        默认盘以外的网盘的 STRM 生成器（M3）。
+
+        只在开启 STRM 生成和播放代理时生成：内容是带网盘前缀的短链，例如
+        ``http://host:9527/d/quark/<file_id>?/<文件名>``，代理据前缀找到对应网盘取链。
+        115 的 STRM 一律交给 P115StrmHelper，这里不生成。
+        """
+        settings = getattr(self, "_strm_settings", None) or {}
+        key = str(getattr(provider, "key", "") or "")
+        if not settings.get("enabled") or key == "115":
+            return None
+        if not provider.supports(CloudDriveCapability.PLAYBACK_REFERENCE):
+            return None
+        from ...utils.strm import StrmGenerator, StrmTemplateError
+
+        reference = provider.require(CloudDriveCapability.PLAYBACK_REFERENCE)
+        template = StrmGenerator.drive_template(
+            key,
+            "",
+            provider_variables=getattr(reference, "template_variables", ()),
+            identifier_variable=StrmGenerator.proxy_identifier_variable(reference),
+            proxy_enabled=bool(settings.get("proxy_enabled")),
+            route=settings.get("route", ""),
+            is_default=False,
+        )
+        if not template:
+            _log("info", f"{getattr(provider, 'name', key)} 的 STRM 需要开启 STRM 播放代理，本次不生成")
+            return None
+        try:
+            return StrmGenerator(
+                StrmGenerator.resolve_base_url(
+                    settings.get("base_url"), template, settings.get("port", 0)
+                ),
+                template,
+                provider_variables=getattr(reference, "template_variables", ()),
+            )
+        except StrmTemplateError as error:
+            _log("error", f"{getattr(provider, 'name', key)} 的 STRM 配置无效：{error}")
+            return None
 
     def scoped_drive_key(self) -> Optional[str]:
         """当前作用域里生效的非默认网盘标识；默认盘返回 None。"""
@@ -270,9 +323,5 @@ class DriveScopeMixin:
         with self.fixed_drive_scope(key) as active:
             if key and active != key and key != getattr(
                     self.__dict__.get("_drive_default_cloud_drive"), "key", None):
-                from app.sdk.logging import logger
-
-                logger.warning(
-                    f"洗版目标盘 {key} 当前不可用，改用默认转存网盘：{getattr(subscribe, 'name', '')}"
-                )
+                _log("warning", f"洗版目标盘 {key} 当前不可用，改用默认转存网盘：{getattr(subscribe, 'name', '')}")
             yield active

@@ -82,6 +82,61 @@ class StrmGenerator:
         )
 
     @classmethod
+    def drive_proxy_template(
+            cls, drive_key: str, identifier_variable: str = "", route: Any = ""
+    ) -> str:
+        """带网盘前缀的代理短链模板（``/d/quark/{file_id}``），供默认盘以外的网盘使用。"""
+        key = str(drive_key or "").strip().lower()
+        if not identifier_variable or not re.fullmatch(r"[a-z0-9_-]+", key):
+            return ""
+        segment = cls.proxy_route_segment(route)
+        return (
+            f"{{base_url}}/{segment}/{key}/{{{identifier_variable}}}"
+            "?/{file_name}"
+        )
+
+    @classmethod
+    def template_fits(cls, template: Any, provider_variables: Iterable[str] = ()) -> bool:
+        """模板里的变量是否都能由该网盘提供（例如夸克没有 pickcode）。"""
+        allowed = cls.CORE_VARIABLES | {str(v or "").strip() for v in provider_variables}
+        try:
+            names = {
+                field for _, field, _, _ in Formatter().parse(str(template or ""))
+                if field is not None
+            }
+        except ValueError:
+            return False
+        return bool(names) and names <= allowed
+
+    @classmethod
+    def drive_template(
+            cls,
+            drive_key: str,
+            configured_template: Any,
+            provider_variables: Iterable[str] = (),
+            identifier_variable: str = "",
+            proxy_enabled: bool = False,
+            route: Any = "",
+            is_default: bool = True,
+    ) -> str:
+        """
+        选出某个网盘的 STRM 模板；返回空串表示这个盘不生成 STRM。
+
+        - 默认转存网盘：配置的模板能用就用；用不了（如夸克遇到 ``{pickcode}``）且开了
+          播放代理时，改用带网盘前缀的 ``file_id`` 短链。
+        - 其他网盘：只有开了播放代理才生成，一律用带网盘前缀的短链，代理据此找到对应网盘。
+        """
+        proxy = (
+            cls.drive_proxy_template(drive_key, identifier_variable, route)
+            if proxy_enabled else ""
+        )
+        if not is_default:
+            return proxy
+        if cls.template_fits(configured_template, provider_variables):
+            return str(configured_template).strip()
+        return proxy
+
+    @classmethod
     def build_proxy_template(
             cls, base_url: str, identifier_variable: str = "", route: Any = ""
     ) -> Tuple[str, str]:

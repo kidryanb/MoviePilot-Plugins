@@ -2625,7 +2625,8 @@ class PostprocessService(OwnerDelegator):
                 mediainfo,
                 max(1, int(season or 1)),
             )
-            if notify_path:
+            # 115 交给 P115StrmHelper 时由它刷新媒体库，这里不重复刷新
+            if notify_path and not self._strm_by_helper:
                 self._media_server_notifier.notify(
                     path=notify_path, mediainfo=mediainfo, file_name=target_name
                 )

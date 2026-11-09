@@ -272,14 +272,14 @@ export function createTransferSection(options) {
           {
             key: "strm_generate_enabled",
             label: "转存后直接生成 STRM",
-            hint: "转存完成后按模板为媒体生成 STRM 文件。115 例外：已启用 P115StrmHelper 时，115 的 STRM 由它生成",
+            hint: "转存完成后按模板为媒体生成 STRM 文件。115 例外：已启用 P115StrmHelper 时，115 的 STRM 和入库刷新都由它负责。默认盘以外的网盘（如夸克）需开启播放代理，STRM 内容为 /d/quark/<file_id> 短链",
             type: "switch",
             cols: 6,
           },
           {
             key: "strm_proxy_enabled",
             label: "STRM 播放代理",
-            hint: "播放时解析直链并 302 跳转",
+            hint: "播放时解析直链：115 等直接 302 跳转；夸克直链要带 Cookie，改为分段中转，支持拖动进度",
             type: "switch",
             cols: 6,
             show: enabled("strm_generate_enabled"),

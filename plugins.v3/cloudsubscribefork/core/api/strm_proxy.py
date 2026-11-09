@@ -145,10 +145,13 @@ class StrmProxyApi(OwnerDelegator):
         """按参数解析文件；夸克保留取链认证头，其余网盘继续跳转。"""
         if not self._proxy_enabled:
             return error_result("STRM 播放代理未启用", status.HTTP_503_SERVICE_UNAVAILABLE)
-        downloader = self._file_downloader()
+        drive = self._proxy_drive(params)
+        if drive is None:
+            return error_result("短链指定的网盘未登录", status.HTTP_503_SERVICE_UNAVAILABLE)
+        downloader = self._file_downloader(drive)
         if not downloader:
             return error_result("当前网盘不支持直链解析", status.HTTP_503_SERVICE_UNAVAILABLE)
-        file_item = self._resolve_file(params)
+        file_item = self._resolve_file(params, drive)
         if not file_item:
             return error_result("未找到目标文件", status.HTTP_404_NOT_FOUND)
         try:
@@ -161,8 +164,7 @@ class StrmProxyApi(OwnerDelegator):
         url = str(url or "").strip()
         if not url:
             return error_result("网盘未返回可用直链", status.HTTP_502_BAD_GATEWAY)
-        drive_key = str(getattr(self, "_cloud_drive_key", "") or
-                        (getattr(self, "_applied_config", None) or {}).get("cloud_drive", ""))
+        drive_key = str(getattr(drive, "key", "") or "")
         if drive_key == "quark":
             return self._relay_result(url, download_headers, method, request_headers)
         logger.info(f"STRM 播放代理跳转：{file_item.name} -> {url.split('?')[0]}")
@@ -240,7 +242,12 @@ class StrmProxyApi(OwnerDelegator):
             raw = ""
         elif raw.startswith(f"{segment}/"):
             raw = raw[len(segment) + 1:]
-        identifier = self._proxy_identifier()
+        # 默认盘以外的网盘短链带网盘前缀：/d/quark/<file_id>
+        head, _, rest = raw.partition("/")
+        if rest and "/" not in rest and "drive" not in params and self._registered_drive(head):
+            params["drive"] = head.lower()
+            raw = rest
+        identifier = self._proxy_identifier(self._proxy_drive(params))
         if identifier and raw and "/" not in raw and identifier not in params:
             params[identifier] = raw
         if not self._param(params, self._NAME_PARAMS):
@@ -258,13 +265,31 @@ class StrmProxyApi(OwnerDelegator):
                 return candidate.lstrip("/")
         return ""
 
-    def _resolve_file(self, params: Any) -> Optional[CloudFile]:
-        """按网盘标识定位文件（短链代理仅支持标识直取链的网盘）。"""
-        return self._fast_file(params, self._param(params, self._NAME_PARAMS))
+    def _registered_drive(self, key: Any) -> Any:
+        """已登录的网盘提供方；没有时返回 None。"""
+        registry = getattr(self, "_cloud_drive_registry", None)
+        normalized = str(key or "").strip().lower()
+        if not registry or not normalized:
+            return None
+        try:
+            return registry.get(normalized)
+        except KeyError:
+            return None
 
-    def _fast_file(self, params: Any, name: str) -> Optional[CloudFile]:
+    def _proxy_drive(self, params: Any) -> Any:
+        """短链指定的网盘（``drive`` 参数），未指定时为默认转存网盘。"""
+        requested = str((params or {}).get("drive") or "").strip().lower()
+        if not requested:
+            return getattr(self, "_cloud_drive", None)
+        return self._registered_drive(requested)
+
+    def _resolve_file(self, params: Any, drive: Any = None) -> Optional[CloudFile]:
+        """按网盘标识定位文件（短链代理仅支持标识直取链的网盘）。"""
+        return self._fast_file(params, self._param(params, self._NAME_PARAMS), drive)
+
+    def _fast_file(self, params: Any, name: str, drive: Any = None) -> Optional[CloudFile]:
         """按网盘声明的播放标识（如 115 的 pickcode）免目录扫描解析。"""
-        identifier = self._proxy_identifier()
+        identifier = self._proxy_identifier(drive)
         value = str(params.get(identifier) or "").strip() if identifier else ""
         if not value:
             return None
@@ -283,14 +308,14 @@ class StrmProxyApi(OwnerDelegator):
                 return value
         return ""
 
-    def _proxy_identifier(self) -> str:
-        """当前网盘可用于短链定位的播放标识变量（无则按路径定位）。"""
-        reference = self._capability(CloudDriveCapability.PLAYBACK_REFERENCE)
+    def _proxy_identifier(self, drive: Any = None) -> str:
+        """网盘可用于短链定位的播放标识变量（无则按路径定位）。"""
+        reference = self._capability(CloudDriveCapability.PLAYBACK_REFERENCE, drive)
         return str(getattr(reference, "proxy_identifier", "") or "").strip()
 
-    def _capability(self, capability: CloudDriveCapability) -> Any:
-        """从当前网盘提供方取能力对象，插件级缓存不可用时也能工作。"""
-        drive = getattr(self, "_cloud_drive", None)
+    def _capability(self, capability: CloudDriveCapability, drive: Any = None) -> Any:
+        """从网盘提供方取能力对象（默认当前转存网盘），插件级缓存不可用时也能工作。"""
+        drive = drive or getattr(self, "_cloud_drive", None)
         if not drive or not drive.supports(capability):
             return None
         try:
@@ -299,8 +324,8 @@ class StrmProxyApi(OwnerDelegator):
             logger.debug(f"获取网盘能力 {capability.value} 失败：{error}")
             return None
 
-    def _file_downloader(self) -> Any:
-        return self._capability(CloudDriveCapability.FILE_DOWNLOAD)
+    def _file_downloader(self, drive: Any = None) -> Any:
+        return self._capability(CloudDriveCapability.FILE_DOWNLOAD, drive)
 
     @staticmethod
     def _redirect_result(url: str, file_name: str, method: str = "GET") -> ProxyResult:

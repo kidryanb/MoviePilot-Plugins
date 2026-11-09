@@ -104,6 +104,8 @@ class SyncHandler(DriveScopeMixin):
     _OFFLINE_PENDING_KEY = "pending_offline_strm"
     _OFFLINE_CHECK_DELAYS = (10, 20, 40, 60, 120, 300)
     _OFFLINE_TIMEOUT = 30 * 60
+    #: 115 的 STRM 与入库刷新交给 P115StrmHelper 时为 True（按网盘作用域取值）
+    _strm_by_helper = False
     _FILE_FINALIZE_TIMEOUT = 30 * 60
     _OFFLINE_MONITOR_LEASE_SECONDS = 15 * 60
     _MEDIA_RECOGNITION_CACHE_LIMIT = 256
@@ -375,6 +377,7 @@ class SyncHandler(DriveScopeMixin):
             )
 
         self._strm_generate_enabled = bool(_get_val("strm_generate_enabled", False))
+        self._strm_by_helper = False
         if (
                 self._strm_generate_enabled
                 and getattr(self._cloud_drive, "key", "") == "115"
@@ -383,6 +386,8 @@ class SyncHandler(DriveScopeMixin):
             # 115 例外：P115StrmHelper 已启用时由它生成 115 的 STRM，本插件不重复写
             logger.info("P115StrmHelper 已启用，115 的 STRM 交给它生成，本插件只为其他网盘生成 STRM")
             self._strm_generate_enabled = False
+            # 115 的入库刷新也交给 P115StrmHelper，避免两边各刷一次
+            self._strm_by_helper = True
         self._nfo_scrape_enabled = bool(_get_val("nfo_scrape_enabled", False))
         self._image_scrape_enabled = bool(_get_val("image_scrape_enabled", False))
         self._platform_transfer_history_enabled = bool(
@@ -426,10 +431,30 @@ class SyncHandler(DriveScopeMixin):
             else:
                 try:
                     s_base_url, s_template = self._resolve_strm_target(_get_val)
+                    reference = self._playback_reference
+                    s_template = StrmGenerator.drive_template(
+                        getattr(self._cloud_drive, "key", ""),
+                        s_template,
+                        provider_variables=reference.template_variables,
+                        identifier_variable=StrmGenerator.proxy_identifier_variable(reference),
+                        proxy_enabled=bool(_get_val("strm_proxy_enabled", False)),
+                        route=_get_val("strm_proxy_route", ""),
+                        is_default=True,
+                    ) or s_template
+                    if s_template != _get_val("strm_url_template", StrmGenerator.DEFAULT_TEMPLATE):
+                        s_base_url = StrmGenerator.resolve_base_url(
+                            _get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL),
+                            s_template,
+                            _get_val("strm_proxy_port", 0),
+                        )
+                        logger.info(
+                            f"{getattr(self._cloud_drive, 'name', '默认网盘')} 不支持配置的 STRM 模板，"
+                            f"改用播放代理短链：{s_template}"
+                        )
                     self._strm_generator = StrmGenerator(
                         s_base_url,
                         s_template,
-                        provider_variables=self._playback_reference.template_variables,
+                        provider_variables=reference.template_variables,
                     )
                 except StrmTemplateError as error:
                     logger.error(f"STRM 生成配置无效，已停止直接生成：{error}")
@@ -505,6 +530,14 @@ class SyncHandler(DriveScopeMixin):
             "sync:baseline_media_server", self, maxsize=256,
             ttl=self._RUNTIME_CACHE_TTL,
         )
+        # M3：其他网盘的 STRM 用带网盘前缀的播放代理短链（夸克为 file_id）
+        self._strm_settings = {
+            "enabled": bool(_get_val("strm_generate_enabled", False)),
+            "proxy_enabled": bool(_get_val("strm_proxy_enabled", False)),
+            "route": _get_val("strm_proxy_route", ""),
+            "base_url": _get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL),
+            "port": _get_val("strm_proxy_port", 0),
+        }
         # M1 同盘优先：为默认盘之外的已登录网盘准备一套转存属性，按分享类型切换。
         self._build_drive_profiles(
             list(getattr(plugin, "_same_cloud_drive_keys", None) or []) if plugin else [],

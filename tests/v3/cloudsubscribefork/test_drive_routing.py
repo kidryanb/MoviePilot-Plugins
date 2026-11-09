@@ -39,6 +39,8 @@ routing = _load(f'{PKG}.core.drive_routing', 'core/drive_routing.py')
 scope = _load(f'{PKG}.handlers.sync.drive_scope', 'handlers/sync/drive_scope.py')
 
 Cap = cloud.CloudDriveCapability
+_package(f'{PKG}.utils')
+strm = _load(f'{PKG}.utils.strm', 'utils/strm.py')
 
 # drive_scope 在函数里按需导入 core.media 与 app.sdk.logging，这里给最小替身
 _media = types.ModuleType(f'{PKG}.core.media')
@@ -52,6 +54,24 @@ if 'app.sdk.logging' not in sys.modules:
         warning=lambda *a, **k: None, info=lambda *a, **k: None, debug=lambda *a, **k: None,
     )
     sys.modules['app.sdk.logging'] = _logging
+
+if 'starlette' not in sys.modules:
+    try:
+        import starlette  # noqa: F401
+    except ImportError:
+        _starlette = _package('starlette')
+        _status = types.ModuleType('starlette.status')
+        for _code, _attr in ((302, 'HTTP_302_FOUND'), (404, 'HTTP_404_NOT_FOUND'),
+                             (502, 'HTTP_502_BAD_GATEWAY'), (503, 'HTTP_503_SERVICE_UNAVAILABLE')):
+            setattr(_status, _attr, _code)
+        _starlette.status = _status
+        sys.modules['starlette.status'] = _status
+_core = sys.modules[f'{PKG}.core']
+_core.CloudDriveCapability = cloud.CloudDriveCapability
+_core.CloudFile = cloud.CloudFile
+_core.OwnerDelegator = object
+_package(f'{PKG}.core.api')
+strm_proxy = _load(f'{PKG}.core.api.strm_proxy', 'core/api/strm_proxy.py')
 
 
 class RoutingRulesTest(unittest.TestCase):
@@ -124,6 +144,72 @@ class M2RulesTest(unittest.TestCase):
         self.assertEqual(routing.landed_drive_key(records, 2, is_movie=True), '115')
         self.assertIsNone(routing.landed_drive_key(records, 2, is_movie=False))
         self.assertIsNone(routing.landed_drive_key(records, None, title=''))
+
+
+class StrmTemplateTest(unittest.TestCase):
+    G = None
+
+    def setUp(self):
+        self.G = strm.StrmGenerator
+
+    def test_quark_default_with_pickcode_template_falls_back_to_file_id_proxy(self):
+        template = self.G.drive_template(
+            'quark', '{base_url}/d/{pickcode}?/{file_name}', {'file_id'}, 'file_id',
+            proxy_enabled=True, route='d', is_default=True)
+        self.assertEqual(template, '{base_url}/d/quark/{file_id}?/{file_name}')
+
+    def test_default_keeps_fitting_template(self):
+        self.assertEqual(
+            self.G.drive_template('115', '{base_url}/d/{pickcode}?/{file_name}', {'pickcode'},
+                                  'pickcode', proxy_enabled=True),
+            '{base_url}/d/{pickcode}?/{file_name}')
+        self.assertEqual(
+            self.G.drive_template('quark', '{base_url}{file_path}', {'file_id'}, 'file_id'),
+            '{base_url}{file_path}')
+
+    def test_other_drive_needs_proxy(self):
+        self.assertEqual(
+            self.G.drive_template('quark', '{base_url}{file_path}', {'file_id'}, 'file_id',
+                                  proxy_enabled=False, is_default=False), '')
+        self.assertEqual(
+            self.G.drive_template('quark', '', {'file_id'}, 'file_id',
+                                  proxy_enabled=True, route='play', is_default=False),
+            '{base_url}/play/quark/{file_id}?/{file_name}')
+
+
+class FakeProxyOwner(strm_proxy.StrmProxyApi):
+    def __init__(self, default, registry):
+        self._cloud_drive = default
+        self._cloud_drive_registry = registry
+        self._applied_config = {'strm_proxy_enabled': True, 'strm_proxy_route': 'd'}
+
+
+class StrmProxyDriveTest(unittest.TestCase):
+    def setUp(self):
+        ref115 = types.SimpleNamespace(proxy_identifier='pickcode')
+        refq = types.SimpleNamespace(proxy_identifier='file_id')
+        self.p115 = types.SimpleNamespace(
+            key='115', supports=lambda c: True, require=lambda c: ref115)
+        self.quark = types.SimpleNamespace(
+            key='quark', supports=lambda c: True, require=lambda c: refq)
+        self.owner = FakeProxyOwner(self.p115, FakeRegistry(self.p115, self.quark))
+
+    def test_unprefixed_link_uses_default_drive(self):
+        params = self.owner.short_params('/d/abc', {})
+        self.assertEqual(params.get('pickcode'), 'abc')
+        self.assertIs(self.owner._proxy_drive(params), self.p115)
+
+    def test_prefixed_link_uses_named_drive(self):
+        params = self.owner.short_params('/d/quark/fid123', {'/电影.mkv': ''})
+        self.assertEqual(params.get('drive'), 'quark')
+        self.assertEqual(params.get('file_id'), 'fid123')
+        self.assertEqual(params.get('name'), '电影.mkv')
+        self.assertIs(self.owner._proxy_drive(params), self.quark)
+        item = self.owner._resolve_file(params, self.quark)
+        self.assertEqual(item.playback_values, {'file_id': 'fid123'})
+
+    def test_unknown_prefix_is_not_a_drive(self):
+        self.assertIsNone(self.owner._proxy_drive({'drive': 'baidu'}))
 
 
 class FakeService:
@@ -282,6 +368,24 @@ class DriveScopeTest(unittest.TestCase):
             self.assertIsNone(key)
             self.assertIs(h._cloud_drive, self.p115)
 
+    def test_quark_profile_gets_prefixed_strm_when_proxy_enabled(self):
+        self.quark.capabilities.add(Cap.PLAYBACK_REFERENCE)
+        h = Handler(self.p115, FakeRegistry(self.p115, self.quark), {})
+        ref = types.SimpleNamespace(template_variables=frozenset({'file_id'}), proxy_identifier='file_id')
+        self.quark.require = lambda capability: ref if capability == Cap.PLAYBACK_REFERENCE else FakeService('quark', capability)
+        h._strm_settings = {'enabled': True, 'proxy_enabled': True, 'route': 'd',
+                            'base_url': 'http://10.0.0.2', 'port': 9527}
+        h._build_drive_profiles(['quark'], 50)
+        with h.drive_scope('quark'):
+            self.assertTrue(h._strm_generate_enabled)
+            self.assertEqual(h._strm_generator.template, '{base_url}/d/quark/{file_id}?/{file_name}')
+            self.assertEqual(h._strm_generator.base_url, 'http://10.0.0.2:9527')
+            self.assertFalse(h._strm_by_helper)
+        h._strm_settings['proxy_enabled'] = False
+        h._build_drive_profiles(['quark'], 50)
+        with h.drive_scope('quark'):
+            self.assertFalse(h._strm_generate_enabled)
+
     def test_unknown_or_unready_drive_is_ignored(self):
         h = self.handler
         with h.drive_scope('baidu') as key:
@@ -323,6 +427,11 @@ class WiringTest(unittest.TestCase):
         retry = self.read('handlers/sync/retry.py')
         self.assertIn('with self.fixed_drive_scope(target_key) as active:', retry)
         self.assertNotIn('跨盘历史的目标网盘与当前转存网盘不一致', retry)
+
+    def test_helper_owned_115_skips_duplicate_refresh(self):
+        self.assertIn('and not self._strm_by_helper', self.read('handlers/sync/history.py'))
+        self.assertIn('and not self._strm_by_helper', self.read('handlers/sync/postprocess.py'))
+        self.assertIn('self._strm_by_helper = True', self.read('handlers/sync/service.py'))
 
     def test_relay_drives_join_search_types(self):
         manager = self.read('core/drive_manager.py')

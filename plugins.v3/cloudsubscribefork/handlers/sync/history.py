@@ -957,7 +957,8 @@ class HistoryService(OwnerDelegator):
         )
 
         notify_path = strm_path
-        if not notify_path and mediainfo and self._local_resource_path:
+        # 115 交给 P115StrmHelper 时由它生成 STRM 并刷新媒体库，这里不再重复刷新
+        if not notify_path and mediainfo and self._local_resource_path and not self._strm_by_helper:
             notify_path = self._resolve_resource_season_dir(
                 self._local_resource_path,
                 target_subscribe,
