@@ -772,6 +772,11 @@ class UpgradeService(OwnerDelegator):
         )
 
     def _upgrade_scan_single_sub(self, subscribe):
+        """网盘洗版扫描固定在默认盘执行（按实际落盘切换属于 M2）。"""
+        with self.no_drive_routing():
+            return self._upgrade_scan_single_sub_default_drive(subscribe)
+
+    def _upgrade_scan_single_sub_default_drive(self, subscribe):
         """按统一基线刷新单个订阅的 episode_priority。"""
         from app.db.subscribe_oper import SubscribeOper
 

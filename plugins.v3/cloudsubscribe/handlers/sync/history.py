@@ -73,6 +73,7 @@ class HistoryService(OwnerDelegator):
             "source_file_name": source_file_name,
             "cloud_dir": cloud_dir,
             "cloud_drive_name": cloud_drive_name,
+            "cloud_drive_key": str(getattr(self._cloud_drive, "key", "") or ""),
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             **fields,
         }

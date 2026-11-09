@@ -10,7 +10,7 @@
 | 上游提交 | `876462067593d4fc2f7bc038f2f73d3eaf099b76`（2026-11-05，说明为「更新版本v1.7.7」） |
 | 上游版本 | `package.v2.json` 与当时的 `plugin_version` 都是 `1.7.7` |
 | 许可 | GPL-3.0-only。插件目录与 `frontend/cloudsubscribe/LICENSE` 各有一份全文 |
-| 本仓库版本 | `0.1.0`（`package.v3.json` 与 `plugin_version`）；引入起点为 `0.0.1-fork` |
+| 本仓库版本 | `0.2.0`（`package.v3.json` 与 `plugin_version`）；引入起点为 `0.0.1-fork` |
 | 插件代码 | `plugins.v3/cloudsubscribe/` |
 | 前端源码 | `frontend/cloudsubscribe/` |
 | 上游使用说明副本 | `docs/cloudsubscribe.md` |
@@ -227,17 +227,27 @@ MoviePilot 的订阅搜索由本插件接管，用已有多源（至少包括 Pa
 
 ### M1 `same_cloud_first` 仲裁，并和订阅接管联调
 
-- [ ] 增加 `preferred_drives` 和 `same_cloud_first`，旧的 `cloud_drive` 仍能读
-- [ ] 前端基础设置改成有序列表和开关
-- [ ] 订阅搜索不再按单一 `_cloud_drive_key` 裁剪 PanSou 的 `cloud_types`
-- [ ] 115 分享转到 115 的 `p115_transfer_path`，夸克分享转到夸克的 `quark_transfer_path`
-- [ ] 只登录一个盘时，另一种分享不写入未登录的盘
+0.2.0 的实现方式（`core/drive_routing.py` + `handlers/sync/drive_scope.py`）：
+
+- 选盘规则是纯函数：`preferred_drives` 里第一个已登录的盘是默认盘；同盘目标 = 已登录、支持分享转存、且在 `preferred_drives` 里的盘。`route_share` 只在分享所属网盘本身是同盘目标时切换，否则沿用默认盘（默认盘能接或交给现有跨盘逻辑）。
+- 上游 SyncHandler 把当前网盘、各能力服务、`_cloud_transfer_path`、`_CLOUD_MEDIA_ROOT`、批大小、STRM 生成器存成实例属性，上百处代码直接读。0.2.0 不逐处改，而是把这 18 个属性换成按作用域取值的描述符：默认取值与上游一致；在 `drive_scope("quark")` 里取夸克那一套。作用域用 `contextvars` 记录，只影响当前线程，跨盘批次的线程池用 `run_in_current_scope` 显式带过去。
+- 进入作用域的位置：电影 / 剧集的逐资源循环（`ExitStack`，每条资源按分享链接切换）、`_is_supported_resource` / `_is_cross_drive_resource`、历史重试线程、后处理监控（待处理记录新增 `drive_key`，按网盘分组后进入对应作用域）。
+- 历史记录新增 `cloud_drive_key`，`cloud_drive_name` 随作用域变化；`target_drive_key` 仍只在跨盘时写。
+- 洗版（剧集洗版流程、网盘洗版扫描、电影洗版候选）用 `no_drive_routing()` 固定在默认盘，按实际落盘处理留到 M2。
+- 非默认盘不生成 STRM（夸克 STRM 属于 M3）。
+
+- [x] 增加 `preferred_drives` 和 `same_cloud_first`，旧的 `cloud_drive` 仍能读（没有 `preferred_drives` 时旧值排第一；保存时 `cloud_drive` 跟随列表第一项，供旧界面逻辑读取）
+- [x] 前端基础设置改成有序多选（按选择顺序）和开关
+- [x] 订阅搜索不再按单一 `_cloud_drive_key` 裁剪：`_cloud_drive_resource_types` 取默认盘与同盘目标的并集，同盘目标自动补进 `resource_type_order` 末尾
+- [x] 115 分享转到 115 的 `p115_transfer_path`，夸克分享转到夸克的 `quark_transfer_path`（整理后进各自的 `*_media_path`）
+- [x] 只登录一个盘时，另一种分享不写入未登录的盘（未登录的盘不注册，也就不是同盘目标；只登录夸克时默认盘自动变成夸克）
+- [ ] 在真实 MP 上按下面的验收各走一遍
 - [ ] `takeover_new_subscribes` 或 `block_system_subscribe` 打开时，新订阅进入 `queue_subscribe_search`，而不是平台下载器（只对勾选的订阅生效，见共存规则 2）
 - [ ] `platform_download_policy=block` 时，接管期内 `SearchChain` 搜索被拦住；`cloud` 时平台磁力能转成网盘离线（仅当目标盘有 `OFFLINE_DOWNLOAD`）
 
 验收：
 
-- 两个盘都登录、`same_cloud_first` 为真：一条 115 分享和一条夸克分享分别出现在各自转存路径，历史里的 `target_drive_key` 与分享类型一致
+- 两个盘都登录、`same_cloud_first` 为真：一条 115 分享和一条夸克分享分别出现在各自转存路径，历史里的 `cloud_drive_key` 与分享类型一致
 - 关掉 `same_cloud_first`：行为回到现在的单盘，只进 `cloud_drive` 指定的盘
 - 只配置夸克：115 分享不会调用 `P115` 的 `transfer_share`
 - 只配置 115：夸克分享同样不会调用 `QuarkShareService.transfer_share`

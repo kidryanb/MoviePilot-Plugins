@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 0.1.0：适配 MP V3 SDK，并加入与 DownloadCloudUpload 的共存规则（core/coexist.py）。
+# 本仓库 plugin_version 0.2.0：适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存（core/drive_routing.py）。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -60,6 +60,7 @@ from .core.coexist import (
     normalize_cookie_source,
     resolve_115_cookie,
 )
+from .core.drive_routing import normalize_preferred_drives
 from .core.storage import CloudSubscribeDataStore
 from .core.subscribe import AutoSubscribeService
 from .drive.scanner import DriverRegistry
@@ -120,7 +121,7 @@ class CloudSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/odomu/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     # 插件作者
     plugin_author = "odomu"
     # 作者主页
@@ -187,6 +188,9 @@ class CloudSubscribe(_PluginBase):
     _cookies: str = ""
     _p115_cookie_source: str = "strm_helper"
     _coexist_notes: List[str] = []
+    _preferred_drives: List[str] = ["115", "quark"]
+    _same_cloud_first: bool = True
+    _same_cloud_drive_keys: List[str] = []
 
     _transfer_task_batch_size: int = 50
     _cross_transfer_enabled: bool = False
@@ -483,6 +487,9 @@ class CloudSubscribe(_PluginBase):
                 *legacy_download_keys, "unblock_start_time", "unblock_end_time"
         ):
             config.pop(deprecated_key, None)
+        # 同盘优先：cloud_drive 只作为兼容字段，跟随兜底顺序的第一项，供旧界面逻辑读取。
+        if isinstance(config.get("preferred_drives"), list) and config["preferred_drives"]:
+            config["cloud_drive"] = str(config["preferred_drives"][0]).strip().lower()
         # 与 DownloadCloudUpload 共存：补齐新装默认值，并锁定会重复上传的开关。
         for key, value in COEXIST_DEFAULTS.items():
             config.setdefault(key, value)
@@ -599,6 +606,12 @@ class CloudSubscribe(_PluginBase):
             self._apply_base_config(config)
             self._apply_notification_config(config)
             self._cloud_drive_key = str(config.get("cloud_drive", "115") or "115").strip().lower()
+            # M1 同盘优先：有序兜底列表兼容旧的单一 cloud_drive；实际默认盘由驱动管理器按登录状态决定。
+            self._preferred_drives = normalize_preferred_drives(
+                config.get("preferred_drives"), config.get("cloud_drive")
+            )
+            self._same_cloud_first = bool(config.get("same_cloud_first", True))
+            self._cloud_drive_key = self._preferred_drives[0]
             self._apply_search_config(config)
             self._apply_sync_config(config)
 

@@ -187,6 +187,8 @@ class UIConfig:
             "skip_other_season_dirs": True,
             "enable_cloud_upgrade": False,
             "enable_pt_upgrade": False,
+            "preferred_drives": ["115", "quark"],
+            "same_cloud_first": True,
             "p115_cookie_source": "strm_helper",
             "upgrade_mode": "largest",
             "upgrade_subscribe_ids": [],

@@ -450,11 +450,14 @@ class PostprocessService(OwnerDelegator):
         groups: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
         for pending_key in due_keys:
             item = pending[pending_key]
-            group_key = self._offline_media_group_key(item, pending_key)
+            drive_key = str(item.get("drive_key") or "")
+            group_key = (drive_key, *self._offline_media_group_key(item, pending_key))
             group = groups.setdefault(group_key, {
                 "pending_keys": set(),
                 "needs_offline": False,
                 "task_ids": set(),
+                # 同一组只含同一网盘的记录，监控按组进入对应网盘作用域
+                "drive_key": drive_key,
             })
             group["pending_keys"].add(pending_key)
             group["needs_offline"] = group["needs_offline"] or str(

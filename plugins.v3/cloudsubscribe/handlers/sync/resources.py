@@ -879,7 +879,14 @@ class ResourceTransferService(OwnerDelegator):
     def _is_cross_drive_resource(
             self, resource: Dict[str, Any], share_url: str = ""
     ) -> bool:
-        """判断候选是否必须经过跨盘下载上传。"""
+        """判断候选是否必须经过跨盘下载上传；同盘优先命中的分享按其所属网盘判断。"""
+        actual_url = str(share_url or resource.get("url") or "").strip()
+        with self.drive_scope_for_url(actual_url):
+            return self._is_cross_drive_resource_in_scope(resource, share_url)
+
+    def _is_cross_drive_resource_in_scope(
+            self, resource: Dict[str, Any], share_url: str = ""
+    ) -> bool:
         if not self._cloud_drive:
             return False
         actual_url = str(share_url or resource.get("url") or "").strip()
@@ -1017,6 +1024,13 @@ class ResourceTransferService(OwnerDelegator):
         )
 
     def _is_supported_resource(
+            self, resource: Dict[str, Any], share_url: str
+    ) -> bool:
+        """判断资源能否处理；同盘优先命中的分享按其所属网盘的能力判断。"""
+        with self.drive_scope_for_url(share_url):
+            return self._is_supported_resource_in_scope(resource, share_url)
+
+    def _is_supported_resource_in_scope(
             self, resource: Dict[str, Any], share_url: str
     ) -> bool:
         if not self._cloud_drive:

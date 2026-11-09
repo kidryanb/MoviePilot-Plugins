@@ -10,6 +10,8 @@
 - 空 115 Cookie 不再注册 115 驱动
 - 前端构建输出改到本目录 `dist/assets`，构建产物随源码提交
 
+0.2.0 起新增同盘优先（M1）：`core/drive_routing.py` 决定一条分享落到哪个盘，`handlers/sync/drive_scope.py` 在转存期间把 SyncHandler 的网盘相关属性切到那个盘。细节见规划文档 M1 一节。
+
 许可为 GPL-3.0-only，全文在本目录 `LICENSE`。后续修改仍须保留该协议与上述来源。本仓库里的 DownloadCloudUpload 继续使用仓库根目录的 MIT 许可，两套代码不要混用许可。
 
 放置位置按本仓库现有约定：`plugins.v3/cloudsubscribe`，并在 `package.v3.json` 登记。改造范围、对应的函数和配置项见 [docs/cloudsubscribe-fork-plan.md](../../docs/cloudsubscribe-fork-plan.md)。

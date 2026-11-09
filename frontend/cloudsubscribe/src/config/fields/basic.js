@@ -97,10 +97,19 @@ export function createBasicSection(cloudDriveItems, options = {}) {
         icon: "mdi-cloud-outline",
         fields: [
           {
-            key: "cloud_drive",
-            label: "当前转存网盘",
+            key: "preferred_drives",
+            label: "转存网盘（兜底顺序）",
             type: "select",
             items: cloudDriveItems,
+            multiple: true,
+            hint: "按选择顺序：第一个已登录的盘作为默认转存网盘。这是落盘的兜底顺序，不是搜索顺序。",
+            cols: 4,
+          },
+          {
+            key: "same_cloud_first",
+            label: "同盘优先",
+            type: "switch",
+            hint: "115 分享转存到 115、夸克分享转存到夸克（需在上面列表中且已登录）；关闭后只用默认网盘。",
             cols: 4,
           },
           {

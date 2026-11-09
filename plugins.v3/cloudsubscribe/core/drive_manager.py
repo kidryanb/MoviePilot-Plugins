@@ -12,6 +12,12 @@ from .cloud import (
 from .transfer import CrossTransferTaskManager
 from ..drive.scanner import DriverRegistry
 from ..search.types import normalize_resource_type
+from .drive_routing import (
+    extend_resource_order,
+    pick_default_drive,
+    same_cloud_targets,
+    search_resource_types,
+)
 
 
 class CloudDriveManager:
@@ -43,14 +49,35 @@ class CloudDriveManager:
         )
 
         cloud_key = getattr(self._plugin, "_cloud_drive_key", "115")
+        preferred = list(getattr(self._plugin, "_preferred_drives", None) or [cloud_key])
+        ready = [provider.key for provider in self.registry.available()]
+        cloud_key = pick_default_drive(preferred, ready, fallback=cloud_key)
+        self._plugin._cloud_drive_key = cloud_key
         try:
             self.active_drive = self.registry.get(cloud_key)
         except KeyError:
             logger.warning(f"网盘提供方 {cloud_key or '<empty>'} 未就绪，请检查对应账号配置")
 
-        self._plugin._cloud_drive_resource_types = (
-            frozenset(self.active_drive.resource_types)
-            if self.active_drive else frozenset()
+        share_ready = [
+            provider.key for provider in self.registry.available()
+            if provider.supports(CloudDriveCapability.SHARE_TRANSFER)
+        ]
+        targets = same_cloud_targets(
+            preferred, share_ready, bool(getattr(self._plugin, "_same_cloud_first", True))
+        )
+        self._plugin._same_cloud_drive_keys = [key for key in targets if key != cloud_key]
+        if self._plugin._same_cloud_drive_keys:
+            logger.info(
+                f"同盘优先已生效：默认转存网盘={cloud_key}，"
+                f"另外按分享类型直接转存到 {', '.join(self._plugin._same_cloud_drive_keys)}"
+            )
+        self._plugin._cloud_drive_resource_types = search_resource_types(
+            self.active_drive.resource_types if self.active_drive else (),
+            [self.registry.get(key).resource_types for key in self._plugin._same_cloud_drive_keys],
+        )
+        self._plugin._resource_type_order = extend_resource_order(
+            getattr(self._plugin, "_resource_type_order", []) or [],
+            self._plugin._same_cloud_drive_keys,
         )
         self._filter_supported_resource_types()
 
@@ -106,8 +133,13 @@ class CloudDriveManager:
                     if getattr(self._plugin, "_cloud_drive_key", "") == key:
                         self.active_drive = provider
                         self._plugin._cloud_drive = provider
-                        self._plugin._cloud_drive_resource_types = frozenset(
-                            provider.resource_types
+                        self._plugin._cloud_drive_resource_types = search_resource_types(
+                            provider.resource_types,
+                            [
+                                self.registry.get(other).resource_types
+                                for other in getattr(self._plugin, "_same_cloud_drive_keys", []) or []
+                                if other != key and other in {p.key for p in self.registry.available()}
+                            ],
                         )
                     return True
         except Exception as err:
@@ -152,8 +184,12 @@ class CloudDriveManager:
 
         cross_enabled = getattr(self._plugin, "_cross_transfer_enabled", False)
 
+        same_cloud = set(getattr(self._plugin, "_same_cloud_drive_keys", []) or [])
+
         def resource_supported(value: str) -> bool:
             if self.active_drive.supports_resource_type(value):
+                return True
+            if normalize_resource_type(value) in same_cloud:
                 return True
             if not cross_enabled:
                 return False
