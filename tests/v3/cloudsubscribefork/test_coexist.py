@@ -168,6 +168,30 @@ class WiringTest(unittest.TestCase):
     def test_built_frontend_is_present(self):
         self.assertTrue((PLUGIN_DIR / 'dist' / 'assets' / 'remoteEntry.js').is_file())
 
+    def test_built_frontend_is_fully_tracked(self):
+        """remoteEntry 引用的每个构建文件都必须提交到仓库，否则市场安装后组件加载失败。"""
+        import re
+        import subprocess
+        assets = PLUGIN_DIR / 'dist' / 'assets'
+        tracked = set(subprocess.run(
+            ['git', 'ls-files', str(assets.relative_to(ROOT))], cwd=ROOT,
+            capture_output=True, text=True, check=True).stdout.split())
+        if not tracked:
+            self.skipTest('不在 git 工作区中')
+        pending = ['remoteEntry.js']
+        seen = set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            path = assets / name
+            self.assertIn(str(path.relative_to(ROOT)), tracked, f'{name} 未提交')
+            if name.endswith('.js'):
+                text = path.read_text(encoding='utf-8')
+                pending.extend(re.findall(r'["\'(]\./([\w.-]+\.(?:js|css))', text))
+        self.assertGreater(len(seen), 10)
+
 
 if __name__ == '__main__':
     unittest.main()
