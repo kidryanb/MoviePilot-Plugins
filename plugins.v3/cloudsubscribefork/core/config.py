@@ -136,6 +136,9 @@ class UIConfig:
             "strm_proxy_enabled": False,
             "strm_proxy_port": 9527,
             "strm_proxy_route": "d",
+            # 服务器中转：夸克 STRM 指向独立的 quark-relay 服务，播放流量走服务器
+            "strm_relay_url": "",
+            "strm_relay_secret": "",
             "media_server_refresh_enabled": False,
             "media_servers": [],
             "media_server_path_mappings": "",

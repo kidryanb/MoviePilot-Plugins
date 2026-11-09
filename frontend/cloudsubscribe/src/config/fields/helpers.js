@@ -109,6 +109,12 @@ export function strmOtherDriveSample(config) {
   const drives = Array.isArray(config?.preferred_drives) ? config.preferred_drives : []
   const others = drives.slice(1).filter((key) => key && key !== "115")
   if (!others.length) return ""
+  const relay = String(config?.strm_relay_url || "").trim().replace(/\/+$/, "")
+  if (/^https?:\/\//.test(relay) && config?.strm_relay_secret) {
+    return others
+      .map((key) => `${key} STRM 内容（服务器中转）：${relay}/${key}/<file_id>/<签名>?/${STRM_SAMPLE_VALUES.file_name}`)
+      .join("\n")
+  }
   if (!config?.strm_proxy_enabled) {
     return `${others.join("、")} 的 STRM 需要打开「STRM 播放代理」才会生成`
   }

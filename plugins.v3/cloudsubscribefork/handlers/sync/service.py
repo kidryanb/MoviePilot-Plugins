@@ -451,10 +451,21 @@ class SyncHandler(DriveScopeMixin):
                             f"{getattr(self._cloud_drive, 'name', '默认网盘')} 不支持配置的 STRM 模板，"
                             f"改用播放代理短链：{s_template}"
                         )
+                    relay_url = StrmGenerator.relay_base_url(_get_val("strm_relay_url", ""))
+                    relay_template = StrmGenerator.relay_template(
+                        getattr(self._cloud_drive, "key", ""),
+                        StrmGenerator.proxy_identifier_variable(reference),
+                    ) if relay_url and _get_val("strm_relay_secret", "") else ""
+                    if relay_template and getattr(self._cloud_drive, "key", "") != "115":
+                        s_base_url, s_template = relay_url, relay_template
+                        logger.info(f"{getattr(self._cloud_drive, 'name', '默认网盘')} STRM 指向服务器中转：{relay_url}")
                     self._strm_generator = StrmGenerator(
                         s_base_url,
                         s_template,
-                        provider_variables=reference.template_variables,
+                        provider_variables={
+                            *reference.template_variables,
+                            StrmGenerator.RELAY_SIGNATURE_VARIABLE,
+                        },
                     )
                 except StrmTemplateError as error:
                     logger.error(f"STRM 生成配置无效，已停止直接生成：{error}")
@@ -537,6 +548,8 @@ class SyncHandler(DriveScopeMixin):
             "route": _get_val("strm_proxy_route", ""),
             "base_url": _get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL),
             "port": _get_val("strm_proxy_port", 0),
+            "relay_url": StrmGenerator.relay_base_url(_get_val("strm_relay_url", "")),
+            "relay_secret": str(_get_val("strm_relay_secret", "") or ""),
         }
         # M1 同盘优先：为默认盘之外的已登录网盘准备一套转存属性，按分享类型切换。
         self._build_drive_profiles(
@@ -1276,7 +1289,15 @@ class SyncHandler(DriveScopeMixin):
                     f"{cloud_dir.rstrip('/')}/{file_name}"
                 )
             return None
-        template_values = self._playback_reference.reference_values(target_file)
+        template_values = dict(self._playback_reference.reference_values(target_file))
+        relay_secret = (getattr(self, "_strm_settings", None) or {}).get("relay_secret")
+        if relay_secret:
+            identifier = StrmGenerator.proxy_identifier_variable(self._playback_reference)
+            template_values[StrmGenerator.RELAY_SIGNATURE_VARIABLE] = StrmGenerator.relay_signature(
+                relay_secret,
+                getattr(self._cloud_drive, "key", ""),
+                template_values.get(identifier, ""),
+            )
         try:
             strm_path, content = self._strm_generator.write(
                 local_root=self._local_resource_path,

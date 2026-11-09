@@ -326,6 +326,22 @@ export function createTransferSection(options) {
             show: enabled("strm_generate_enabled"),
           },
           {
+            key: "strm_relay_url",
+            label: "服务器中转地址（夸克）",
+            placeholder: "https://mp.example.com/q",
+            hint: "填了就让夸克 STRM 指向服务器上的 quark-relay，播放流量走服务器、不占家里上行；留空则用本机播放代理",
+            cols: 6,
+            show: enabled("strm_generate_enabled"),
+          },
+          {
+            key: "strm_relay_secret",
+            label: "服务器中转密钥",
+            type: "password",
+            hint: "和 quark-relay 的 RELAY_SECRET 填同一串随机字符（建议 32 位以上），用于给 STRM 链接签名",
+            cols: 6,
+            show: enabled("strm_generate_enabled"),
+          },
+          {
             key: "strm_proxy_help",
             type: "info",
             label: "播放代理与 STRM 示例",

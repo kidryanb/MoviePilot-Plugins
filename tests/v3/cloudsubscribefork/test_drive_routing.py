@@ -213,6 +213,23 @@ class StrmProxyDriveTest(unittest.TestCase):
         self.assertTrue(strm_proxy._ProxyHTTPServer.daemon_threads)
         self.assertFalse(strm_proxy._ProxyHTTPServer.block_on_close)
 
+    def test_relay_link_api_checks_signature(self):
+        downloader = types.SimpleNamespace(resolve_download_link=lambda item: ('https://dl/x', {'Cookie': 'c'}))
+        refq = types.SimpleNamespace(proxy_identifier='file_id')
+        quark = types.SimpleNamespace(
+            key='quark', supports=lambda c: True,
+            require=lambda c: downloader if c == Cap.FILE_DOWNLOAD else refq)
+        owner = FakeProxyOwner(self.p115, FakeRegistry(self.p115, quark))
+        owner._applied_config = {'strm_relay_url': 'https://mp.example.com/q', 'strm_relay_secret': 'k'}
+        good = strm.StrmGenerator.relay_signature('k', 'quark', 'fid')
+        result = owner.api_relay_link('quark', 'fid', good)
+        self.assertTrue(result['success'])
+        self.assertEqual(result['data'], {'url': 'https://dl/x', 'headers': {'Cookie': 'c'}})
+        self.assertFalse(owner.api_relay_link('quark', 'fid', '0' * 32)['success'])
+        self.assertFalse(owner.api_relay_link('quark', 'other', good)['success'])
+        owner._applied_config = {}
+        self.assertFalse(owner.api_relay_link('quark', 'fid', good)['success'])
+
     def test_unknown_prefix_is_not_a_drive(self):
         self.assertIsNone(self.owner._proxy_drive({'drive': 'baidu'}))
 
@@ -391,6 +408,20 @@ class DriveScopeTest(unittest.TestCase):
         with h.drive_scope('quark'):
             self.assertFalse(h._strm_generate_enabled)
 
+    def test_quark_profile_uses_server_relay_when_configured(self):
+        self.quark.capabilities.add(Cap.PLAYBACK_REFERENCE)
+        h = Handler(self.p115, FakeRegistry(self.p115, self.quark), {})
+        ref = types.SimpleNamespace(template_variables=frozenset({'file_id'}), proxy_identifier='file_id')
+        self.quark.require = lambda capability: ref if capability == Cap.PLAYBACK_REFERENCE else FakeService('quark', capability)
+        h._strm_settings = {'enabled': True, 'proxy_enabled': False, 'route': 'd',
+                            'base_url': 'http://10.0.0.2', 'port': 9527,
+                            'relay_url': 'https://mp.example.com/q', 'relay_secret': 's3cret'}
+        h._build_drive_profiles(['quark'], 50)
+        with h.drive_scope('quark'):
+            self.assertTrue(h._strm_generate_enabled)
+            self.assertEqual(h._strm_generator.base_url, 'https://mp.example.com/q')
+            self.assertEqual(h._strm_generator.template, '{base_url}/quark/{file_id}/{relay_sig}?/{file_name}')
+
     def test_unknown_or_unready_drive_is_ignored(self):
         h = self.handler
         with h.drive_scope('baidu') as key:
@@ -443,6 +474,11 @@ class WiringTest(unittest.TestCase):
         self.assertIn('def _run_bounded(', plugin)
         for step in ('停止播放代理监听', '关闭网盘客户端', '关闭搜索客户端', '关闭反盾浏览器会话'):
             self.assertIn(f'self._run_bounded("{step}"', plugin.replace('self._run_bounded(\n                "', 'self._run_bounded("'))
+
+    def test_generate_strm_signs_relay_links(self):
+        service = self.read('handlers/sync/service.py')
+        self.assertIn('template_values[StrmGenerator.RELAY_SIGNATURE_VARIABLE] = StrmGenerator.relay_signature(', service)
+        self.assertIn('"path": "/relay/link"', self.read('core/api/registration.py'))
 
     def test_relay_drives_join_search_types(self):
         manager = self.read('core/drive_manager.py')
