@@ -460,5 +460,48 @@ class MoviePilotLLMAvailabilityTest(unittest.TestCase):
         self.assertIn('self.api_ai_selftest', registration)
 
 
+class SelfTestSampleTest(unittest.TestCase):
+    def samples(self):
+        import ast
+        tree = ast.parse((PLUGIN_DIR / 'core/services/platform.py').read_text(encoding='utf-8'))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(
+                    getattr(target, 'id', '') == '_AI_SELFTEST_FILES' for target in node.targets):
+                return ast.literal_eval(node.value)
+        self.fail('没有找到 _AI_SELFTEST_FILES')
+
+    def test_injection_sample_has_no_legitimate_evidence(self):
+        blocked = [(name, episode) for name, episode, must_block in self.samples() if must_block]
+        self.assertEqual(len(blocked), 1)
+        name, episode = blocked[0]
+        P = parser_module.MediaFileParser
+        self.assertIsNone(P.split_issue_episode(name))
+        self.assertIsNone(P.bare_issue_number(name))
+        self.assertIsNone(P.extract_date(name))
+        self.assertFalse(P.season_numbers(name))
+        self.assertNotIn(str(episode), name)
+
+    def test_selftest_is_rate_limited_and_read_only(self):
+        source = (PLUGIN_DIR / 'core/services/platform.py').read_text(encoding='utf-8')
+        self.assertIn('_AI_SELFTEST_INTERVAL', source)
+        self.assertIn('persist=False', source)
+        self.assertNotIn('daily_token_budget=0', source)
+
+
+class ReviewStoreReadOnlyTest(unittest.TestCase):
+    def test_list_without_persist_does_not_write(self):
+        data = MemoryData()
+        clock = [1_800_000_000.0]
+        store = ReviewStore(data.get, data.save, expire_days=7, now=lambda: clock[0])
+        review_id = store.add({'key': 'k'})
+        clock[0] += 8 * 86400
+        writes = []
+        readonly = ReviewStore(data.get, lambda *a: writes.append(a), expire_days=7,
+                               now=lambda: clock[0])
+        self.assertEqual(readonly.list(persist=False), [])
+        self.assertEqual(writes, [])
+        self.assertEqual(store.get(review_id)['status'], 'pending')
+
+
 if __name__ == '__main__':
     unittest.main()
