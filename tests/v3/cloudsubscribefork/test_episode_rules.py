@@ -36,6 +36,8 @@ class SplitIssueTest(unittest.TestCase):
         self.assertEqual(Parser.split_issue_episode('现在就出发 第四季 第4期上.mp4'), 7)
         self.assertEqual(Parser.split_issue_episode('现在就出发.S04.第4期(下).1080p.mkv'), 8)
         self.assertEqual(Parser.split_issue_episode('第5期（下）.mp4'), 10)
+        self.assertEqual(Parser.split_issue_episode('现在就出发 第四季 第4期下.mp4'), 8)
+        self.assertEqual(Parser.split_issue_episode('现在就出发 第四季 第5期下.mp4'), 10)
         self.assertEqual(Parser.split_issue_episode('第十期上集.mp4'), 19)
         self.assertEqual(Parser.split_issue_episode('第二十一期下篇.mp4'), 42)
 
