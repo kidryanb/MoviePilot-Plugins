@@ -55,6 +55,7 @@ from .subtitles import SubtitleService
 from .television import TelevisionSyncProcessor
 from .upgrade import UpgradeService
 from .utils import extract_ed2k_filename, format_episode_ranges, subscription_missing_episodes
+from ...utils.episode_guard import SeasonGuard, today_in
 from ...search.magnet import extract_magnet_hash
 from ..notification import MediaServerNotifier, MediaServerResolver
 from ..search import SearchHandler
@@ -277,6 +278,15 @@ class SyncHandler(DriveScopeMixin):
             maxsize=10000,
         )
         self._skip_other_season_dirs = bool(_get_val("skip_other_season_dirs", True))
+        self._filter_unaired_episodes = bool(_get_val("filter_unaired_episodes", True))
+        self._unaired_episode_grace_days = max(
+            0, min(int(_get_val("unaired_episode_grace_days", 0) or 0), 30)
+        )
+        self._filename_date_tolerance_days = max(
+            0, min(int(_get_val("filename_date_tolerance_days", 1) or 0), 30)
+        )
+        self._require_season_evidence = bool(_get_val("require_season_evidence", True))
+        self._air_date_cache: Dict[Tuple[int, int, str], Tuple[float, Dict[int, str]]] = {}
         self._notify = bool(_get_val("notify", False))
         self._notification_type = _get_val("notification_type", NotificationType.Plugin)
 
@@ -2936,6 +2946,77 @@ class SyncHandler(DriveScopeMixin):
                 logger.debug(f"单文件转存返回失败但转存目录复核已存在，自愈复用：{save_path}/{target_check_name}")
                 return True
         return success
+
+    _AIR_DATE_CACHE_TTL = 6 * 3600
+
+    def _episode_air_dates(self, subscribe, mediainfo: MediaInfo, season: int) -> Dict[int, str]:
+        """TMDB 本季各集播出日（集号 → YYYY-MM-DD），读取失败返回空字典。"""
+        tmdb_id = int(
+            getattr(mediainfo, "tmdb_id", None) or getattr(subscribe, "tmdbid", None) or 0
+        )
+        if not tmdb_id:
+            return {}
+        group = str(getattr(subscribe, "episode_group", None) or "")
+        key = (tmdb_id, int(season), group)
+        cached = self._air_date_cache.get(key)
+        if cached and time.time() - cached[0] < self._AIR_DATE_CACHE_TTL:
+            return dict(cached[1])
+        try:
+            from app.chain.tmdb import TmdbChain
+
+            chain = TmdbChain()
+            try:
+                episodes = chain.tmdb_episodes(
+                    tmdbid=tmdb_id, season=int(season), episode_group=group or None
+                )
+            except TypeError:
+                episodes = chain.tmdb_episodes(tmdbid=tmdb_id, season=int(season))
+        except Exception as error:
+            logger.warning(
+                f"读取 TMDB 播出日失败，未确认播出的集本轮都不搜索："
+                f"{getattr(subscribe, 'name', '')} S{int(season):02d}，{error}"
+            )
+            return {}
+        result: Dict[int, str] = {}
+        for episode in episodes or []:
+            get = episode.get if isinstance(episode, dict) else (
+                lambda name, ep=episode: getattr(ep, name, None)
+            )
+            number, air_date = get("episode_number"), str(get("air_date") or "").strip()
+            if number is None:
+                continue
+            try:
+                result[int(number)] = air_date[:10]
+            except (TypeError, ValueError):
+                continue
+        self._air_date_cache[key] = (time.time(), dict(result))
+        return result
+
+    def _season_guard(
+            self, subscribe, mediainfo: MediaInfo, season: int, filter_unaired: bool = True
+    ) -> SeasonGuard:
+        """订阅季的校验上下文：本季年份、播出日、宽限天数等。"""
+        season_years = getattr(mediainfo, "season_years", None) or {}
+        season_year = season_years.get(int(season)) or season_years.get(str(season))
+        if not season_year and int(season) == 1:
+            season_year = getattr(mediainfo, "year", None)
+        try:
+            from app.sdk.config import settings
+
+            tz_name = str(getattr(settings, "TZ", "") or "")
+        except Exception:
+            tz_name = ""
+        return SeasonGuard.build(
+            season=int(season),
+            season_year=season_year,
+            show_year=getattr(mediainfo, "year", None),
+            air_dates=self._episode_air_dates(subscribe, mediainfo, season),
+            today=today_in(tz_name),
+            filter_unaired=bool(filter_unaired and self._filter_unaired_episodes),
+            grace_days=self._unaired_episode_grace_days,
+            date_tolerance_days=self._filename_date_tolerance_days,
+            require_season_evidence=self._require_season_evidence,
+        )
 
     def _mp_subscription_missing(
             self,

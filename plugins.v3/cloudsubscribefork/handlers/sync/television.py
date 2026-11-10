@@ -10,6 +10,7 @@ from app.sdk.utilities import StringUtils
 
 from .utils import candidate_progress, normalize_season
 from ...core import OwnerDelegator
+from ...utils.episode_guard import existing_union
 
 
 class TelevisionSyncProcessor(OwnerDelegator):
@@ -128,6 +129,11 @@ class TelevisionSyncProcessor(OwnerDelegator):
             missing_episodes: List[int] = []
             discovered_manual_episodes: Set[int] = set()
             target_episode_air_dates: Dict[int, str] = {}
+            # 本季年份 + TMDB 播出日：拦住旧季文件占位、未播出集被搜索或转存
+            season_guard = self._season_guard(
+                subscribe, mediainfo, season, filter_unaired=not manual_resources
+            )
+            target_episode_air_dates.update(season_guard.air_date_strings())
             existing_episodes_in_resources: Set[int] = set()
             # 以目标网盘实际剧集计算缺集（不依赖媒体服务器）
             self._set_task_phase(subscribe, "检查网盘内容", 35)
@@ -195,6 +201,41 @@ class TelevisionSyncProcessor(OwnerDelegator):
                     episode for episode in missing_episodes
                     if episode >= subscribe.start_episode
                 ]
+
+            if missing_episodes and not discover_manual_episodes:
+                # 网盘媒体目录、本地中转目录里已有的集不再搜索（包括被错集占住的槽位，
+                # 等人工清理后自然回到缺集）；只减少搜索目标，不改订阅进度、不删文件。
+                local_episodes: Set[int] = set()
+                try:
+                    local_episodes = set(self._scan_local_resource_episodes(
+                        subscribe, mediainfo, season, start_ep, total_ep
+                    ) or set())
+                except Exception as error:
+                    logger.debug(f"本地中转目录检查失败：{error}")
+                already_present = existing_union(cloud_matched, local_episodes) & set(missing_episodes)
+                if already_present:
+                    logger.info(
+                        f"{mediainfo.title_year} S{season:02d} 网盘或本地中转目录里已有、不再搜索："
+                        f"{self._format_episode_ranges(already_present)}"
+                    )
+                    missing_episodes = [
+                        episode for episode in missing_episodes
+                        if episode not in already_present
+                    ]
+                aired, unaired = season_guard.split_aired(missing_episodes)
+                if unaired:
+                    next_date = season_guard.next_air_date(unaired)
+                    logger.info(
+                        f"{mediainfo.title_year} S{season:02d} 跳过未播出集："
+                        f"{self._format_episode_ranges(set(unaired))}"
+                        + (f"（最近播出 {next_date.isoformat()}）" if next_date else "（TMDB 没有播出日期）")
+                    )
+                missing_episodes = aired
+                if not missing_episodes:
+                    logger.info(
+                        f"{mediainfo.title_year} S{season:02d} 本轮没有已播出的缺集，不搜索"
+                    )
+                    return transferred_count
 
             logger.debug(
                 f"{mediainfo.title_year} S{season:02d} 待转存剧集："
@@ -329,6 +370,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
 
                         share_url = resource.get("url", "")
                         resource_title = resource.get("title", "")
+                        resource_guard = season_guard.with_title(resource_title)
 
                         share_url = self._resolve_candidate_resource_url(
                             candidate_resources,
@@ -391,6 +433,10 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                         f"目标季数=S{season:02d}，"
                                         f"标题={magnet_title or resource_title}"
                                     )
+                                    continue
+                                title_reason = resource_guard.title_reject_reason()
+                                if title_reason:
+                                    logger.debug(f"离线资源季归属校验排除：{title_reason}")
                                     continue
                                 title_episodes = self._magnet_title_episodes(
                                     resource, season
@@ -520,6 +566,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 share_files,
                                 season,
                                 mediainfo if is_cross_batch else None,
+                                guard=resource_guard,
                             )
                             matched_episode_numbers = (
                                 share_episodes - discovered_manual_episodes - existing_episodes_for_manual
@@ -562,6 +609,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 season,
                                 episodes_to_match,
                                 require_media_match=is_cross_batch,
+                                guard=resource_guard,
                             )
 
                             matched_pairs = []
@@ -613,6 +661,20 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     f"匹配到 {len(matched_pairs)} 个文件："
                                     f"{StringUtils.format_ep([ep for ep, _ in matched_pairs])}"
                                 )
+                            # 转存前再按原始文件名校验一次季归属、日期和播出状态
+                            checked_items = []
+                            for entry in matched_items:
+                                reason = resource_guard.reject_reason(
+                                    entry["file"], entry["episode"]
+                                )
+                                if reason:
+                                    logger.info(
+                                        f"转存前校验拒绝 S{season:02d}E{entry['episode']:02d}："
+                                        f"{entry['file'].get('name', '')}：{reason}"
+                                    )
+                                    continue
+                                checked_items.append(entry)
+                            matched_items = checked_items
                             if not matched_items:
                                 continue
 

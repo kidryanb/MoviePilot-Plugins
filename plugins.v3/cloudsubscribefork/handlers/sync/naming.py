@@ -466,6 +466,9 @@ class SyncNamingService(OwnerDelegator):
             if MediaFileParser.contains_other_season(text, int(season or 1)):
                 return set()
             return {split_episode}
+        if MediaFileParser.SPLIT_ISSUE_ENABLED and MediaFileParser.bare_issue_number(text):
+            # 只有「第N期」没有上/下，不猜集号
+            return set()
         parsed = MediaFileParser.extract_season_episode(text)
         if parsed:
             file_season, episode = parsed
@@ -752,23 +755,26 @@ class SyncNamingService(OwnerDelegator):
 
     @staticmethod
     def _summarize_share_episodes(
-            files: List[dict], season: int, mediainfo: Optional[MediaInfo] = None
+            files: List[dict], season: int, mediainfo: Optional[MediaInfo] = None,
+            guard=None,
     ) -> Tuple[int, Set[int]]:
         """递归统计分享中的实际视频数量和目标季集数。"""
         video_count = 0
         episodes = set()
 
-        def walk(items: List[dict]):
+        def walk(items: List[dict], parent: str = ""):
             nonlocal video_count
             for item in items or []:
-                if item.get("is_dir"):
-                    walk(item.get("children") or [])
-                    continue
                 name = str(item.get("name") or "")
+                if item.get("is_dir"):
+                    walk(item.get("children") or [], "/".join(p for p in (parent, name) if p))
+                    continue
                 if not MediaFileParser.is_video(name):
                     continue
                 video_count += 1
-                episode = FileMatcher.episode_from_file(item, season, mediainfo)
+                if parent and not item.get("_relative_path") and not item.get("relative_path"):
+                    item = {**item, "_relative_path": f"{parent}/{name}"}
+                episode = FileMatcher.episode_from_file(item, season, mediainfo, guard)
                 if episode is not None:
                     episodes.add(episode)
 

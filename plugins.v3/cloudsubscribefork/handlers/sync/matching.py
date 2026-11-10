@@ -21,6 +21,7 @@ class FileMatchingService(OwnerDelegator):
             season: int,
             episodes: List[int],
             require_media_match: bool = True,
+            guard=None,
     ) -> Dict[int, tuple]:
         """按结构收集剧集候选，再使用规则组选择文件。"""
         episode_list = list(dict.fromkeys(int(value) for value in episodes))
@@ -29,6 +30,7 @@ class FileMatchingService(OwnerDelegator):
             season,
             episode_list,
             mediainfo=mediainfo if require_media_match else None,
+            guard=guard,
         )
         results = {}
         for episode in episode_list:

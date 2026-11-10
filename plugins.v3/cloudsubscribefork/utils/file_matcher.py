@@ -176,19 +176,50 @@ class FileMatcher:
 
     @classmethod
     def episode_from_file(
-            cls, item: Any, season: int, mediainfo: Any = None
+            cls, item: Any, season: int, mediainfo: Any = None, guard: Any = None
     ) -> int | None:
-        """使用元数据解析文件，并确认它属于目标媒体。"""
+        """使用元数据解析文件，并确认它属于目标媒体。
+
+        guard（SeasonGuard）存在时，先按原始文件名、目录和分享标题校验季归属和日期，
+        再做「第N期上/下」换算，避免把旧季的期号当成本季集号。
+        """
         name = str((item or {}).get("name") or "").strip()
         if not name or not MediaFileParser.is_video(name):
             return None
-        if MediaFileParser.contains_other_season(name, season):
+        relative_path = str(
+            (item or {}).get("_relative_path") or (item or {}).get("relative_path") or ""
+        )
+        if guard is not None:
+            reason = guard.file_reject_reason(name, relative_path)
+            if reason:
+                logger.debug(f"季归属校验拒绝：{name}：{reason}")
+                return None
+        elif MediaFileParser.contains_other_season(name, season):
             return None
+
+        if MediaFileParser.SPLIT_ISSUE_ENABLED and MediaFileParser.bare_issue_number(name):
+            # 只有「第N期」没有上/下：不猜 E{N} 或 E{2N}，只认播出日完全一致的那一集
+            episode = guard.bare_issue_episode(name) if guard is not None else None
+            if episode is None:
+                logger.debug(f"只有期号没有上/下，跳过不猜集号：{name}")
+                return None
+            reason = guard.episode_reject_reason(name, episode, relative_path)
+            if reason:
+                logger.debug(f"季归属校验拒绝：{name}：{reason}")
+                return None
+            return episode
+
         meta = cls._platform_meta(name)
         if not meta:
             return None
 
         if not cls._has_explicit_media_title(meta):
+            if guard is not None:
+                # 没有作品名、要按订阅季补季号：先确认文件确实属于本季
+                reason = guard.file_reject_reason(name, relative_path, require_evidence=True)
+                if reason:
+                    logger.debug(f"季归属校验拒绝：{name}：{reason}")
+                    return None
             meta, default_episode = cls._meta_with_target_defaults(
                 name, meta, mediainfo, season
             )
@@ -209,6 +240,11 @@ class FileMatcher:
             return None
         if not cls._matches_target_media(meta, mediainfo, season):
             return None
+        if guard is not None:
+            reason = guard.episode_reject_reason(name, episode, relative_path)
+            if reason:
+                logger.debug(f"季归属校验拒绝：{name}：{reason}")
+                return None
         return episode
 
     @staticmethod
@@ -217,6 +253,7 @@ class FileMatcher:
             season: int,
             episodes: List[int],
             mediainfo: Any = None,
+            guard: Any = None,
     ) -> Dict[int, List[Any]]:
         episode_list = list(dict.fromkeys(int(value) for value in episodes))
         if not episode_list:
@@ -250,7 +287,11 @@ class FileMatcher:
             total_files += 1
             if not MediaFileParser.is_video(file_name):
                 continue
-            found_episode = FileMatcher.episode_from_file(item, season, mediainfo)
+            if guard is not None and guard.file_reject_reason(
+                    file_name, str(item.get("_relative_path") or item.get("relative_path") or "")
+            ):
+                continue
+            found_episode = FileMatcher.episode_from_file(item, season, mediainfo, guard)
             if found_episode is not None:
                 if found_episode in target_episodes:
                     strict_matches[found_episode].append(item)
@@ -258,14 +299,35 @@ class FileMatcher:
             # 有目标媒体时，平台无法识别标题或季集的文件不能进入转存。
             if mediainfo is not None:
                 continue
+            if MediaFileParser.SPLIT_ISSUE_ENABLED and MediaFileParser.bare_issue_number(file_name):
+                continue
+            relative_path = str(item.get("_relative_path") or item.get("relative_path") or "")
+
+            if guard is not None and guard.file_reject_reason(
+                    file_name, relative_path, require_evidence=True
+            ):
+                continue
+
+            def episode_allowed(value: int) -> bool:
+                return guard is None or not guard.episode_reject_reason(
+                    file_name, value, relative_path
+                )
+
             matches_season = MediaFileParser.matches_target_season(file_name, season)
             has_season_marker = bool(MediaFileParser.ANY_SEASON_PATTERN.search(file_name))
             for episode in episode_list:
                 if any(pattern.search(file_name) for pattern in loose_patterns[episode]):
-                    if season == 1 or matches_season or not has_season_marker:
+                    if (
+                            (season == 1 or matches_season or not has_season_marker)
+                            and episode_allowed(episode)
+                    ):
                         loose_matches[episode].append(item)
                     continue
-                if matches_season and loosest_patterns[episode].search(file_name):
+                if (
+                        matches_season
+                        and loosest_patterns[episode].search(file_name)
+                        and episode_allowed(episode)
+                ):
                     loosest_matches[episode].append(item)
 
         results = {}
