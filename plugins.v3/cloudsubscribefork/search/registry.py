@@ -4,6 +4,7 @@ from typing import Any
 
 from app.sdk.logging import logger
 
+from .proxy_scope import source_proxy
 from .scanner import SearchSourceRegistry
 from ..core.search import SearchRegistry
 
@@ -66,9 +67,11 @@ def create_search_registry(
     skipped = []
     for def_cls in SearchSourceRegistry.get_definitions():
         try:
-            client = def_cls.create_client(config, context)
-            service = def_cls.create_service(client, config, context)
-            provider = def_cls.create_provider(service, client, config, context)
+            source_context = dict(context)
+            source_context["proxy"] = source_proxy(def_cls.id, config, context.get("proxy"))
+            client = def_cls.create_client(config, source_context)
+            service = def_cls.create_service(client, config, source_context)
+            provider = def_cls.create_provider(service, client, config, source_context)
             if provider:
                 registry.register(provider, replace=True)
             else:

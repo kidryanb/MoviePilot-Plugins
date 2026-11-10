@@ -1,6 +1,7 @@
 """AnimeGarden 动漫搜索服务。"""
 
 import json
+import threading
 from typing import Any, Dict, List, Optional
 
 from app.sdk.logging import logger
@@ -34,6 +35,7 @@ class AnimeGardenSearchService:
         self._client = client
         self._result_limit = max(1, min(int(result_limit or 80), 200))
         self._config = config or {}
+        self._lock = threading.RLock()
         self._search_cache = create_platform_ttl_cache(
             "animegarden_search",
             getattr(client, "base_url", ""),
@@ -192,6 +194,6 @@ class AnimeGardenSearchService:
 
     def clear_cache(self) -> int:
         with self._lock:
-            count = len(self._cache)
-            self._cache.clear()
+            count = len(self._search_cache)
+            self._search_cache.clear()
             return count

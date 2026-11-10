@@ -11,6 +11,7 @@ from app.schemas.types import MediaType
 from .client import Dian115Client, Dian115Error
 from .resource import Dian115ResourceService
 from ..budget import PointBudgetLedger
+from ..proxy_scope import owner_source_proxy
 from ..matching import unique_texts
 from ...core import OwnerDelegator, SearchQuery, format_search_label
 from ...core.media import tmdb_id_of
@@ -44,7 +45,7 @@ class Dian115SearchService(OwnerDelegator):
 
     def _get_dian115_resources(self) -> Dian115ResourceService:
         """复用唯一认证客户端，返回独立的资源服务。"""
-        proxy = self._search_proxy
+        proxy = owner_source_proxy(self, "dian115")
         with self._dian115_client_lock:
             client = self._dian115_client
             if client is None or not client.matches_config(

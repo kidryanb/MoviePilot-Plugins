@@ -16,6 +16,7 @@ from .resource import (
     valid_share_url,
 )
 from ..budget import PointBudgetLedger
+from ..proxy_scope import owner_source_proxy
 from ..types import (
     SUPPORTED_CLOUD_TYPES,
     normalize_resource_type,
@@ -90,7 +91,7 @@ class HDHavenSearchService(OwnerDelegator):
                     or self._client.base_url != base_url
                     or self._client.username != self._hdhaven_username
                     or self._client.password != self._hdhaven_password
-                    or self._client.proxy != self._search_proxy
+                    or self._client.proxy != owner_source_proxy(self, "hdhaven")
             ):
                 if self._client:
                     self._client.close()
@@ -98,7 +99,7 @@ class HDHavenSearchService(OwnerDelegator):
                     base_url=base_url,
                     username=self._hdhaven_username,
                     password=self._hdhaven_password,
-                    proxy=self._search_proxy,
+                    proxy=owner_source_proxy(self, "hdhaven"),
                     request_interval=float(
                         getattr(self, "_hdhaven_request_interval", 2.0) or 2.0
                     ),

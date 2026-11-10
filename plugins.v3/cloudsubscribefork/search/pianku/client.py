@@ -34,6 +34,9 @@ RESOLVE_CONCURRENCY = 8
 RESOLVE_INTERVAL = 0.15
 #: 单次列表/解析请求的超时上限（秒）：防止挂死请求占满共享串行队列
 REQUEST_TIMEOUT_CAP = 25
+#: 列表页遇到这些状态码时重试一次。
+_RETRY_STATUS = frozenset({500, 502, 503, 504})
+_RETRY_DELAY = 1.5
 
 #: 签名链接 -> 签发它的会话 Cookie
 _LINK_SESSION_CACHE = create_platform_ttl_cache(
@@ -193,20 +196,29 @@ class PiankuClient:
                 impersonate="chrome",
             )
 
-        try:
-            response = gated_request(
-                self._request_gate,
-                _requester,
-                retry_exceptions=(
-                    requests.exceptions.Timeout,
-                    requests.exceptions.ConnectionError,
-                ),
-                max_retries=2,
-                initial_delay=1.5,
-            )
-        except Exception as error:
-            raise PiankuError(f"片库列表请求失败：{request_error_summary(error)}") from error
-        status = int(getattr(response, "status_code", 0) or 0)
+        status = 0
+        response = None
+        for attempt in range(2):
+            try:
+                response = gated_request(
+                    self._request_gate,
+                    _requester,
+                    retry_exceptions=(
+                        requests.exceptions.Timeout,
+                        requests.exceptions.ConnectionError,
+                    ),
+                    max_retries=2,
+                    initial_delay=1.5,
+                )
+            except Exception as error:
+                raise PiankuError(f"片库列表请求失败：{request_error_summary(error)}") from error
+            status = int(getattr(response, "status_code", 0) or 0)
+            if status in _RETRY_STATUS and attempt == 0:
+                # 站点偶发 5xx：稍等后重试一次。
+                logger.debug(f"片库列表返回 HTTP {status}，{_RETRY_DELAY:.1f} 秒后重试一次")
+                time.sleep(_RETRY_DELAY)
+                continue
+            break
         if status != 200:
             raise PiankuError(f"片库列表请求异常：HTTP {status}")
 

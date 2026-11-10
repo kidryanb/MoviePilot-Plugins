@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 0.5.3：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
+# 本仓库 plugin_version 0.5.4：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -123,7 +123,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/kidryanb/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.5.3"
+    plugin_version = "0.5.4"
     # 插件作者
     plugin_author = "kidryanb"
     # 作者主页
@@ -170,6 +170,7 @@ class CloudSubscribeFork(_PluginBase):
     # 搜索源优先级（按列表顺序），为空时使用已启用来源的默认顺序
     _search_source_order: List[str] = []
     _search_proxy: Any = ""
+    _search_proxy_sources: List[str] = []
     _search_proxy_address: str = ""
     _search_proxy_username: str = ""
     _search_proxy_password: str = ""
@@ -788,6 +789,7 @@ class CloudSubscribeFork(_PluginBase):
             logger.info(f"搜索资源优先级：{' > '.join(self._search_source_order)}")
 
         raw_search_proxy = str(config.get("search_proxy", "") or "").strip()
+        self._search_proxy_sources = list(config.get("search_proxy_sources") or [])
         self._search_proxy_username = str(config.get("search_proxy_username", "") or "").strip()
         self._search_proxy_password = str(config.get("search_proxy_password", "") or "")
         try:

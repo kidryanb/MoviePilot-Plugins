@@ -19,6 +19,7 @@ from .web import (
     valid_share_url,
 )
 from ..budget import PointBudgetLedger
+from ..proxy_scope import owner_source_proxy
 from ..types import (
     PREVIEW_PROVIDER_KEYS,
     normalize_resource_type,
@@ -161,7 +162,7 @@ class HDHiveSearchService(OwnerDelegator):
 
     def _get_hdhive_web_resources(self) -> HDHiveResourceService:
         """复用唯一认证客户端，返回独立的资源服务。"""
-        proxy = self._search_proxy
+        proxy = owner_source_proxy(self, "hdhive")
         with self._hdhive_web_lock:
             client = self._hdhive_web_client
             if client is None or not client.matches_config(

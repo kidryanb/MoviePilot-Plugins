@@ -137,7 +137,7 @@ class SeedHubSearchService:
             results.append({
                 "url": "",
                 "title": item.get("title") or f"SeedHub 资源 {resource_id}",
-                "size": parse_size_str(item.get("size")),
+                "size": parse_size_str(item.get("size")) or parse_size_str(item.get("title")),
                 "update_time": item.get("updated_at") or "",
                 "resource_type": resource_type,
                 "source_url": f"{self._client.base_url}/movies/{movie_id}/",
@@ -181,7 +181,7 @@ class SeedHubSearchService:
                     results.append({
                         "url": url,
                         "title": item.get("title") or f"SeedHub 资源 {identity}",
-                        "size": parse_size_str(item.get("size")),
+                        "size": parse_size_str(item.get("size")) or parse_size_str(item.get("title")),
                         "update_time": item.get("updated_at") or "",
                         "resource_type": resource_type,
                         "source_url": f"{self._client.base_url}/movies/{movie_id}/",

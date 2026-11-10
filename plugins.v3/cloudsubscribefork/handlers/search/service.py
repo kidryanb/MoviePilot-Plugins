@@ -36,6 +36,7 @@ from ...search.scanner import SearchSourceRegistry
 from ...search.types import normalize_resource_type
 from ...utils.cache import create_platform_ttl_cache
 from ...utils.http_client import RequestGateCooldown
+from ...utils.source_slots import SourceSlots
 
 _COMPONENT_TYPES = (
     HDHiveSearchService,
@@ -104,6 +105,7 @@ class SearchHandler:
 
         self._search_source_order = get_val("search_source_order", []) or []
         self._search_proxy = get_val("search_proxy")
+        self._search_proxy_sources = list(get_val("search_proxy_sources", []) or [])
         self._search_cache_enabled = bool(get_val("search_cache_enabled", True))
         search_cache_ttl_minutes = get_val("search_cache_ttl_minutes", 30)
         self._search_cache_ttl = max(60, int(search_cache_ttl_minutes or 30) * 60)
@@ -968,11 +970,14 @@ class SearchHandler:
         # 触发初始进度
         emit_progress(active=True)
 
-        workers = min(max(1, self._search_concurrency), len(ordered_sources))
+        # 每个渠道一个线程，用并发名额控制同时在跑的数量。某个渠道超时后立即让出名额，
+        # 它的线程在后台自然结束，不会占着名额拖慢排在后面的渠道。
+        concurrency = min(max(1, self._search_concurrency), len(ordered_sources))
         executor = ThreadPoolExecutor(
-            max_workers=workers,
+            max_workers=len(ordered_sources),
             thread_name_prefix="cloudsubscribe-search",
         )
+        slots = SourceSlots(concurrency)
         stopped = False
         futures = {}
         source_started_at: Dict[str, float] = {}
@@ -980,9 +985,16 @@ class SearchHandler:
         abandoned_sources = set()
 
         def run_source(source: str) -> List[Dict]:
-            started_at = time.monotonic()
+            if not slots.acquire(source):
+                return []
             with source_started_lock:
-                source_started_at[source] = started_at
+                source_started_at[source] = time.monotonic()
+            try:
+                return _run_source(source)
+            finally:
+                slots.release(source)
+
+        def _run_source(source: str) -> List[Dict]:
             with channels_lock:
                 if channels_state[source]["status"] != "circuit_break":
                     channels_state[source]["status"] = "searching"
@@ -1042,6 +1054,7 @@ class SearchHandler:
                         )
                     f.cancel()
                     pending.discard(f)
+                    slots.abandon(source)
 
                 if timed_out_futures:
                     emit_progress(active=bool(pending))
@@ -1095,10 +1108,13 @@ class SearchHandler:
                             if channels_state[source]["status"] in {"pending", "searching"}:
                                 channels_state[source]["status"] = "skipped" if stopped else "failed"
                     f.cancel()
+                    if source:
+                        slots.abandon(source)
                 if abandoned_sources:
                     logger.info(
                         f"⏹️ [{search_label}] 搜索流程结束，已停止等待未完成的渠道：{', '.join(sorted(s.upper() for s in abandoned_sources))}"
                     )
+            slots.finish()
             executor.shutdown(wait=False, cancel_futures=True)
 
         with channels_lock:

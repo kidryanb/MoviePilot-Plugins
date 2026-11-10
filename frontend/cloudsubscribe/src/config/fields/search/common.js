@@ -54,6 +54,15 @@ export function createCommonSearchGroups(resourceTypeItems, sourceItems = []) {
           type: "password",
           cols: 6,
         },
+        {
+          key: "search_proxy_sources",
+          label: "走代理的渠道",
+          type: "select",
+          items: sourceItems,
+          multiple: true,
+          hint: "留空表示全部渠道都走代理；局域网地址（如 NAS 上的 PanSou）总是直连",
+          cols: 12,
+        },
       ],
     },
     {
