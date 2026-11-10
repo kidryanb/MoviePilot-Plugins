@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 0.5.0：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
+# 本仓库 plugin_version 0.5.1：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -123,7 +123,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/kidryanb/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.5.0"
+    plugin_version = "0.5.1"
     # 插件作者
     plugin_author = "kidryanb"
     # 作者主页
@@ -870,6 +870,7 @@ class CloudSubscribeFork(_PluginBase):
         self._batch_interval = max(0, min(float(config.get("batch_interval", 3) or 0), 60))
         self._transfer_risk_cooldown = max(60, min(int(config.get("transfer_risk_cooldown", 1800) or 1800), 86400))
         self._skip_other_season_dirs = config.get("skip_other_season_dirs", True)
+        MediaFileParser.SPLIT_ISSUE_ENABLED = bool(config.get("split_issue_episode", True))
         configured_video_exts, configured_sub_exts = MediaFileParser.configure_extensions(
             video_extensions=config.get("video_extensions"),
             subtitle_extensions=config.get("subtitle_extensions"),

@@ -188,6 +188,7 @@ class UIConfig:
             "batch_interval": 3,
             "transfer_risk_cooldown": 1800,
             "skip_other_season_dirs": True,
+            "split_issue_episode": True,
             "enable_cloud_upgrade": False,
             "enable_pt_upgrade": False,
             "preferred_drives": ["115", "quark"],

@@ -88,7 +88,9 @@ class FileMatcher:
     def _platform_meta(name: str) -> Any:
         try:
             # 部分分享用竖线类字符拆散中文片名，先去除这类装饰噪声再交给平台识别。
-            normalized = FileMatcher._TITLE_NOISE_RE.sub("", name)
+            normalized = FileMatcher._TITLE_NOISE_RE.sub(
+                "", MediaFileParser.normalize_split_issue(name)
+            )
             normalized = FileMatcher._COMPACT_YEAR_RE.sub(r" \1", normalized)
             return MetaInfo(normalized)
         except Exception as error:

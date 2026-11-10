@@ -77,3 +77,41 @@ def normalize_season(value: Any, default: int = 1) -> int:
         return max(0, int(default if value is None or value == "" else value))
     except (TypeError, ValueError):
         return default
+
+
+def subscription_missing_episodes(
+        expected: Iterable[Any],
+        note: Iterable[Any],
+        season: int,
+        exists: Any = None,
+        no_exists: Any = None,
+        server_checked: bool = True,
+) -> set:
+    """
+    按 MP 订阅口径算缺集：媒体服务器里没有、订阅也没记为已下载的集。
+
+    :param expected: 订阅范围内的集号
+    :param note: 订阅已下载记录
+    :param season: 季号
+    :param exists: ``DownloadChain.get_no_exists_info`` 的第一个返回值
+    :param no_exists: 同上第二个返回值（{媒体: {季: NotExistMediaInfo}}）
+    :param server_checked: 媒体服务器查询是否成功；失败时只按 note 计算
+    """
+    expected_set = {int(value) for value in expected or []}
+    note_set = {int(value) for value in note or [] if str(value).isdigit()}
+    missing = set(expected_set)
+    if server_checked:
+        server_missing = set()
+        for seasons in (no_exists or {}).values():
+            for info in (seasons or {}).values():
+                if int(getattr(info, "season", -1) or -1) != int(season):
+                    continue
+                episodes = getattr(info, "episodes", None) or []
+                server_missing.update(
+                    expected_set if not episodes else (int(value) for value in episodes)
+                )
+        if exists and not server_missing:
+            missing = set()
+        elif exists or no_exists:
+            missing = server_missing & expected_set
+    return missing - note_set

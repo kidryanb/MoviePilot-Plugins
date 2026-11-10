@@ -193,6 +193,13 @@ export function createTransferSection(options) {
         icon: "mdi-file-video-outline",
         fields: [
           {
+            key: "split_issue_episode",
+            label: "综艺上下期按两集计",
+            type: "switch",
+            hint: "「第N期上」算第 2N−1 集，「第N期下」算第 2N 集，和 TMDB 的分集一致",
+            cols: 12,
+          },
+          {
             key: "video_extensions",
             label: "视频文件扩展名",
             type: "multi-select",

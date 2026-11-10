@@ -155,34 +155,29 @@ class TelevisionSyncProcessor(OwnerDelegator):
             )
 
             if expected_episodes:
-                current_note = {
-                                   int(episode) for episode in (subscribe.note or [])
-                                   if str(episode).isdigit()
-                               } & expected_episodes
-                missing_episodes = sorted(expected_episodes - existing_episodes_in_resources)
-                restored_missing = set(missing_episodes) & current_note
-                if not transient_target:
-                    self._reconcile_subscribe_physical_episodes(
-                        subscribe=subscribe,
-                        episodes=existing_episodes_in_resources,
-                        start_episode=start_ep,
-                        total_episode=total_ep,
-                    )
+                # 缺集以 MP 订阅为准（媒体服务器 + 订阅已下载记录），网盘扫描结果只用于日志，
+                # 不再用它改写订阅进度：库里的文件可能在插件扫不到的目录里。
+                mp_missing = self._mp_subscription_missing(
+                    subscribe, mediainfo, season, expected_episodes
+                )
+                missing_episodes = sorted(mp_missing)
+                existing_episodes_in_resources = expected_episodes - mp_missing
+                cloud_only = (cloud_matched & mp_missing)
                 logger.debug(
-                    f"{cloud_drive_name}已存在 "
+                    f"MP 订阅已有 "
                     f"{self._format_episode_ranges(existing_episodes_in_resources)}，缺失 "
                     f"{self._format_episode_ranges(set(missing_episodes))}"
                 )
-                if restored_missing:
-                    logger.warning(
-                        f"媒体库与{cloud_drive_name}均不存在，已删除订阅误标并恢复缺集："
-                        f"{self._format_episode_ranges(restored_missing)}"
+                if cloud_only:
+                    logger.info(
+                        f"{cloud_drive_name}目录里有但 MP 订阅仍算缺失，按 MP 为准继续搜索："
+                        f"{self._format_episode_ranges(cloud_only)}"
                     )
 
             if expected_episodes and not missing_episodes and not discover_manual_episodes:
                 logger.info(
                     f"{mediainfo.title_year} S{season:02d} "
-                    f"{cloud_drive_name}已完整存在"
+                    "MP 订阅已没有缺集"
                 )
                 if not transient_target:
                     self._subscribe_handler.check_and_finish_subscribe(

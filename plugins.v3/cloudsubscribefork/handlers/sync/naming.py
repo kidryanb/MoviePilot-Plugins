@@ -141,7 +141,10 @@ class SyncNamingService(OwnerDelegator):
         if subscribe and getattr(subscribe, "custom_words", None):
             cw = subscribe.custom_words
             custom_words_list = [w for w in (cw.split("\n") if isinstance(cw, str) else list(cw)) if w.strip()]
-        meta = MetaInfo(source_name, custom_words=custom_words_list)
+        meta = MetaInfo(
+            MediaFileParser.normalize_split_issue(source_name),
+            custom_words=custom_words_list,
+        )
         meta.type = effective_media.type
         meta.year = getattr(subscribe, "year", None) or effective_media.year
         if season is not None:
@@ -455,6 +458,14 @@ class SyncNamingService(OwnerDelegator):
         text = str(file_name or "").strip()
         if not text:
             return set()
+        split_episode = MediaFileParser.split_issue_episode(text)
+        if split_episode:
+            file_season = MediaFileParser.extract_season_episode(text)
+            if file_season and int(file_season[0]) != int(season or 1):
+                return set()
+            if MediaFileParser.contains_other_season(text, int(season or 1)):
+                return set()
+            return {split_episode}
         parsed = MediaFileParser.extract_season_episode(text)
         if parsed:
             file_season, episode = parsed
