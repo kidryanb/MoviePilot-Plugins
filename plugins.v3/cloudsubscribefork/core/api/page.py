@@ -20,6 +20,7 @@ from ..media import call_with_supported_kwargs, recognize_media
 from ...drive.scanner import DriverRegistry
 from ...search.matching import is_anime_media
 from ...search.scanner import SearchSourceRegistry
+from ...search.proxy_scope import source_proxy
 from ...search.types import (
     resource_type_aliases,
     resource_type_catalog,
@@ -428,7 +429,10 @@ class PageApi(OwnerDelegator):
             plugin_cfg = self._get_plugin_config()
             pansou_options = PanSouSourceDefinition.get_dynamic_options(
                 plugin_cfg,
-                {"proxy": getattr(self, "_search_proxy", None) or plugin_cfg.get("search_proxy")},
+                {"proxy": source_proxy(
+                    "pansou", plugin_cfg,
+                    getattr(self, "_search_proxy", None) or plugin_cfg.get("search_proxy"),
+                )},
             )
             result = {"success": True, "data": {"pansou": pansou_options}}
             _UI_OPTIONS_CACHE.set(cache_key, copy.deepcopy(result))
@@ -608,7 +612,10 @@ class PageApi(OwnerDelegator):
         plugin_cfg = self._get_plugin_config()
         pansou_options = PanSouSourceDefinition.get_dynamic_options(
             plugin_cfg,
-            {"proxy": getattr(self, "_search_proxy", None) or plugin_cfg.get("search_proxy")},
+            {"proxy": source_proxy(
+                    "pansou", plugin_cfg,
+                    getattr(self, "_search_proxy", None) or plugin_cfg.get("search_proxy"),
+                )},
         )
         available_sources = []
         search_handler = getattr(self, "_search_handler", None)

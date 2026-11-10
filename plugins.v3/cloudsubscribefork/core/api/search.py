@@ -458,7 +458,7 @@ class SearchApi(OwnerDelegator):
         )
         allowed = (definition.get_config_keys() if definition else set()) | {
             "resource_type_order", "search_proxy", "search_proxy_username",
-            "search_proxy_password",
+            "search_proxy_password", "search_proxy_sources",
         }
         if isinstance(overrides, dict):
             base.update({

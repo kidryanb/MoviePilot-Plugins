@@ -158,6 +158,7 @@ class UIConfig:
             "timeout_slow_write": 300,
             "search_source_order": ["pansou"],
             "search_proxy": "",
+            "search_proxy_sources": [],
             "search_proxy_username": "",
             "search_proxy_password": "",
             "cf_solver_url": "",

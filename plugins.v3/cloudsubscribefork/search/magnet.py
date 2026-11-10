@@ -5,7 +5,14 @@ from urllib.parse import quote
 from .matching import unique_texts
 from ..utils.magnet import parse_magnet_metadata
 
-_SIZE_REGEX = re.compile(r"(\d+(?:\.\d+)?)\s*(PB|TB|GB|MB|KB|B)?", re.IGNORECASE)
+#: 带单位的大小：58.44G、1.5 GB、700MiB、12,345 KB。
+#: 单字母单位只认 T/G/M，避免把 1080p、4K 当成大小。
+_SIZE_REGEX = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:([PTGMK])I?B|([TGM]))(?![A-Z])"
+    r"|(?<![\d.])(\d+(?:\.\d+)?)\s*B(?![A-Z])",
+    re.IGNORECASE,
+)
+_BARE_NUMBER = re.compile(r"^\d+(?:\.\d+)?$")
 _MAGNET_REGEX = re.compile(r"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s\"'<>]*", re.IGNORECASE)
 _HASH_REGEX = re.compile(r"urn:btih:([a-zA-Z0-9]{32,40})", re.IGNORECASE)
 
@@ -31,12 +38,16 @@ def parse_size_str(size_text: Any) -> int:
     text = str(size_text).strip().replace(",", "")
     if not text:
         return 0
+    if _BARE_NUMBER.match(text):
+        return max(0, int(float(text)))
+    # 必须带单位：标题里的年份、集号等裸数字不能当成字节数。
     match = _SIZE_REGEX.search(text)
     if not match:
         return 0
-    val = float(match.group(1))
-    unit = (match.group(2) or "B").upper()
-    return int(val * SIZE_UNITS.get(unit, 1))
+    if match.group(1):
+        unit = (match.group(2) or match.group(3)).upper()
+        return int(float(match.group(1)) * SIZE_UNITS[f"{unit}B"])
+    return int(float(match.group(4)))
 
 
 def extract_magnet_hash(text: str) -> Optional[str]:
