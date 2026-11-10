@@ -33,6 +33,7 @@ from ...search.types import (
     resource_type_name,
 )
 from ...utils.cache import create_platform_ttl_cache
+from ..ai import ReviewStore
 
 
 class PlatformIntegrationService(OwnerDelegator):
@@ -655,6 +656,56 @@ class PlatformIntegrationService(OwnerDelegator):
         data["candidate_ids"] = list(dict.fromkeys(candidate_ids))
         result["data"] = data
         return result
+
+    def _ai_review_store(self) -> ReviewStore:
+        return ReviewStore(
+            self.get_data,
+            self.save_data,
+            expire_days=int(getattr(self, "_ai_review_expire_days", 7) or 7),
+        )
+
+    def list_ai_reviews(self, status: str = "pending", limit: int = 20) -> Dict[str, Any]:
+        """AI 季集裁决的待复核文件，供 AI 助手展示；不含分享链接。"""
+        status = status if status in {"pending", "approved", "rejected", "expired", ""} else "pending"
+        records = self._ai_review_store().list(status=status, limit=limit)
+        return {
+            "success": True,
+            "message": f"共 {len(records)} 条" if records else "没有待复核的文件",
+            "reviews": [ReviewStore.public_view(record) for record in records],
+            "next_step": (
+                "逐条用中文说明文件名、拟定集号和规则/AI 的理由；需要用户决定时用 ask_user_choice "
+                "给出放行和拒绝两个选项，按钮值保留 review_id，收到选择后调用 "
+                "cloudsubscribe_decide_review。不要替用户做决定。"
+            ) if records else "",
+        }
+
+    def decide_ai_review(self, review_id: str, approve: bool, note: str = "") -> Dict[str, Any]:
+        """放行：只把这一个文件按这一集提交转存；拒绝：只标记，不动网盘文件。"""
+        store = self._ai_review_store()
+        record = store.decide(review_id, approve, note)
+        if not record:
+            return {"success": False, "message": "复核记录不存在、已处理或已过期"}
+        label = (
+            f"{record.get('title')} S{int(record.get('season') or 0):02d}"
+            f"E{int(record.get('episode') or 0):02d} {record.get('file_name')}"
+        )
+        if not approve:
+            logger.info(f"待复核已拒绝：{label}")
+            return {"success": True, "message": f"已拒绝：{label}"}
+        subscribe_id = int(record.get("subscribe_id") or 0)
+        resource = dict(record.get("resource") or {})
+        if subscribe_id <= 0 or not str(resource.get("url") or "").strip():
+            store.reopen(review_id)
+            return {"success": False, "message": "记录缺少订阅或分享信息，无法放行"}
+        result = dict(self.start_selected_resources(subscribe_id, [resource]) or {})
+        if not result.get("success"):
+            store.reopen(review_id)
+            return {
+                "success": False,
+                "message": f"提交转存失败，已退回待复核：{result.get('message') or '未知原因'}",
+            }
+        logger.info(f"待复核已放行并提交转存：{label}")
+        return {"success": True, "message": f"已放行并提交转存：{label}"}
 
     def get_runtime_performance(self, include_tasks: bool = True) -> Dict[str, Any]:
         """汇总当前任务、搜索缓存和同步阶段性能指标。"""

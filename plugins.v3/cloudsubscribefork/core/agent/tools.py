@@ -17,6 +17,8 @@ from .schemas import (
     CloudSubscribePerformanceInput,
     CloudSubscribeResourceSearchInput,
     CloudSubscribeResourceSelectInput,
+    CloudSubscribeReviewDecideInput,
+    CloudSubscribeReviewListInput,
     CloudSubscribeStatusInput,
     CloudSubscribeSyncInput,
 )
@@ -418,5 +420,48 @@ class CloudSubscribeConfigUpdateTool(MoviePilotTool):
             "default",
             plugin.update_agent_config,
             updates,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+
+
+class CloudSubscribeReviewListTool(MoviePilotTool):
+    name: str = "cloudsubscribe_list_reviews"
+    tags: list[str] = [ToolTag.Read, ToolTag.Plugin, ToolTag.Subscription]
+    description: str = (
+        "列出网盘订阅助手的待复核文件：同步时规则判不准、AI 也没把握而暂不转存的剧集文件。"
+        "用户询问待复核、待确认、为什么某集没转存时使用；用中文逐条说明文件名、拟定季集和理由。"
+    )
+    args_schema: Type[BaseModel] = CloudSubscribeReviewListInput
+
+    def get_tool_message(self, **kwargs) -> Optional[str]:
+        return "正在查询网盘订阅待复核文件"
+
+    async def run(self, status: str = "pending", limit: int = 20, **kwargs) -> str:
+        plugin = _plugin()
+        if not plugin:
+            return "网盘订阅助手未运行或智能体功能已关闭"
+        result = await self.run_blocking("default", plugin.list_ai_reviews, status, limit)
+        return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+
+
+class CloudSubscribeReviewDecideTool(MoviePilotTool):
+    name: str = "cloudsubscribe_decide_review"
+    tags: list[str] = [ToolTag.Write, ToolTag.Subscription, ToolTag.Transfer, ToolTag.Plugin]
+    description: str = (
+        "处理一条待复核：approve=true 把这个文件按拟定的季集转存，false 拒绝。"
+        "只能使用 cloudsubscribe_list_reviews 返回的 review_id，且必须是用户明确的选择，"
+        "不能由智能体自行判断后调用。"
+    )
+    args_schema: Type[BaseModel] = CloudSubscribeReviewDecideInput
+
+    def get_tool_message(self, **kwargs) -> Optional[str]:
+        return "正在放行待复核文件" if kwargs.get("approve") else "正在拒绝待复核文件"
+
+    async def run(self, review_id: str, approve: bool, note: Optional[str] = None, **kwargs) -> str:
+        plugin = _plugin()
+        if not plugin:
+            return "网盘订阅助手未运行或智能体功能已关闭"
+        result = await self.run_blocking(
+            "storage", plugin.decide_ai_review, review_id, bool(approve), note or ""
         )
         return json.dumps(result, ensure_ascii=False, indent=2, default=str)

@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 0.5.7：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
+# 本仓库 plugin_version 0.5.8：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -123,7 +123,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/kidryanb/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.5.7"
+    plugin_version = "0.5.8"
     # 插件作者
     plugin_author = "kidryanb"
     # 作者主页
@@ -212,6 +212,13 @@ class CloudSubscribeFork(_PluginBase):
     _unaired_episode_grace_days: int = 0
     _filename_date_tolerance_days: int = 1
     _require_season_evidence: bool = True
+    _ai_assist_mode: str = "auto"
+    _ai_model: str = ""
+    _ai_error_policy: str = "review"
+    _ai_reject_policy: str = "reject"
+    _ai_timeout_seconds: int = 30
+    _ai_daily_token_budget: int = 200000
+    _ai_review_expire_days: int = 7
     _video_extensions: List[str] = [".mkv", ".mp4", ".avi", ".iso"]
     _subtitle_extensions: List[str] = [
         ".srt", ".ass", ".ssa", ".vtt", ".sub", ".sup", ".idx", ".smi", ".mks"
@@ -884,6 +891,20 @@ class CloudSubscribeFork(_PluginBase):
             0, min(int(config.get("filename_date_tolerance_days", 1) or 0), 30)
         )
         self._require_season_evidence = bool(config.get("require_season_evidence", True))
+        ai_mode = str(config.get("ai_assist_mode", "auto") or "auto").strip().lower()
+        self._ai_assist_mode = ai_mode if ai_mode in {"auto", "shadow", "off"} else "auto"
+        self._ai_model = str(config.get("ai_model", "") or "").strip()
+        ai_error_policy = str(config.get("ai_error_policy", "review") or "review").strip().lower()
+        self._ai_error_policy = ai_error_policy if ai_error_policy in {"review", "rule"} else "review"
+        ai_reject_policy = str(config.get("ai_reject_policy", "reject") or "reject").strip().lower()
+        self._ai_reject_policy = ai_reject_policy if ai_reject_policy in {"reject", "review"} else "reject"
+        self._ai_timeout_seconds = max(5, min(int(config.get("ai_timeout_seconds", 30) or 30), 300))
+        self._ai_daily_token_budget = max(
+            0, min(int(config.get("ai_daily_token_budget", 200000) or 0), 100000000)
+        )
+        self._ai_review_expire_days = max(
+            1, min(int(config.get("ai_review_expire_days", 7) or 7), 90)
+        )
         MediaFileParser.SPLIT_ISSUE_ENABLED = bool(config.get("split_issue_episode", True))
         configured_video_exts, configured_sub_exts = MediaFileParser.configure_extensions(
             video_extensions=config.get("video_extensions"),

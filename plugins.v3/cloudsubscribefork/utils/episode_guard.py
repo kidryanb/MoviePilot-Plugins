@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 import datetime
+import re
 from dataclasses import dataclass, field, replace
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from .file_parser import MediaFileParser
+
+
+# 分享标题像多季合集：季归属只能看文件本身
+_PACK_TITLE_PATTERN = re.compile(
+    r"附前|前\s*[0-9一二三四五六七八九十]+\s*季|合集|全\s*[0-9一二三四五六七八九十]+\s*季"
+    r"|[0-9一二三四五六七八九十]+\s*[-~～至到]\s*[0-9一二三四五六七八九十]+\s*季"
+    r"|S\d{1,2}\s*[-~]\s*S?\d{1,2}(?![0-9Ee])",
+    re.IGNORECASE,
+)
+# 文件名像非正片：加更、花絮、预告等
+_EXTRA_CONTENT_PATTERN = re.compile(
+    r"加更|纯享|先导|花絮|彩蛋|幕后|抢先|超前|预告|特辑|直播|陪看|精华|片段|reaction",
+    re.IGNORECASE,
+)
 
 
 def parse_air_date(value) -> Optional[datetime.date]:
@@ -225,6 +240,52 @@ class SeasonGuard:
                 f"{air_date.isoformat()} 相差超过 {self.date_tolerance_days} 天"
             )
         return ""
+
+    # ---- 匹配强弱 ----
+
+    def match_strength(self, item: Mapping, episode: int) -> Tuple[bool, List[str]]:
+        """规则已放行的文件，依据是否足够硬。
+
+        强匹配：文件名或目录自带本季季号，或文件日期在本季年份且与该集播出日吻合；
+        第一季在没有任何季号线索时也算强匹配。返回 (是否强匹配, 弱匹配原因列表)。
+        """
+        name = str((item or {}).get("name") or "")
+        relative_path = str(
+            (item or {}).get("_relative_path") or (item or {}).get("relative_path") or ""
+        )
+        levels = self._levels(name, relative_path)
+        reasons: List[str] = []
+        if _EXTRA_CONTENT_PATTERN.search(name):
+            reasons.append("文件名带加更、花絮、预告等字样，可能不是正片")
+        if _PACK_TITLE_PATTERN.search(self.share_title or ""):
+            reasons.append("分享标题像多季合集")
+
+        file_season = any(
+            self.season in MediaFileParser.season_numbers(level) for level in levels
+        )
+        file_date = None
+        for level in levels:
+            file_date = MediaFileParser.extract_date(level)
+            if file_date:
+                break
+        date_ok = False
+        if file_date and (not self.season_year or file_date.year == self.season_year):
+            air_date = self.air_dates.get(int(episode))
+            date_ok = air_date is None or abs((file_date - air_date).days) <= max(
+                0, int(self.date_tolerance_days)
+            )
+        any_marker = any(MediaFileParser.season_numbers(level) for level in levels)
+        title_marker = bool(MediaFileParser.season_numbers(self.share_title or ""))
+        if not (file_season or date_ok):
+            if not (self.season == 1 and not any_marker and not title_marker):
+                reasons.append("文件名和目录里没有本季季号或吻合的日期，只靠分享标题或订阅季判断")
+        if (
+                MediaFileParser.SPLIT_ISSUE_ENABLED
+                and MediaFileParser.split_issue_episode(name) is not None
+                and not date_ok
+        ):
+            reasons.append("集号由「第N期上/下」换算，没有日期核对")
+        return not reasons, reasons
 
     def reject_reason(self, item: Mapping, episode: Optional[int] = None) -> str:
         name = str((item or {}).get("name") or "")

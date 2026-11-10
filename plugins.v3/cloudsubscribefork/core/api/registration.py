@@ -24,6 +24,8 @@ from ..agent import (
     CloudSubscribePerformanceTool,
     CloudSubscribeResourceSearchTool,
     CloudSubscribeResourceSelectTool,
+    CloudSubscribeReviewDecideTool,
+    CloudSubscribeReviewListTool,
     CloudSubscribeStatusTool,
     CloudSubscribeSyncTool,
 )
@@ -563,6 +565,8 @@ class MoviePilotRegistration(OwnerDelegator):
             CloudSubscribeLinksTool,
             CloudSubscribeResourceSearchTool,
             CloudSubscribeResourceSelectTool,
+            CloudSubscribeReviewListTool,
+            CloudSubscribeReviewDecideTool,
             CloudSubscribeCacheClearTool,
             CloudSubscribeConfigUpdateTool,
             CloudSubscribePerformanceTool,

@@ -134,6 +134,28 @@ class CloudSubscribeResourceSelectInput(BaseModel):
     )
 
 
+class CloudSubscribeReviewListInput(BaseModel):
+    status: str = Field(
+        default="pending",
+        description="pending（待复核，默认）、approved（已放行）、rejected（已拒绝）、expired（已过期）",
+    )
+    limit: int = Field(default=20, ge=1, le=50, description="最多返回条数")
+
+
+class CloudSubscribeReviewDecideInput(BaseModel):
+    review_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=16,
+        description="cloudsubscribe_list_reviews 返回的 review_id",
+    )
+    approve: bool = Field(
+        ...,
+        description="true 放行（把这个文件按这一集转存），false 拒绝；必须是用户明确的选择",
+    )
+    note: Optional[str] = Field(default=None, max_length=200, description="用户补充说明，可选")
+
+
 class CloudSubscribeCacheClearInput(BaseModel):
     confirm: bool = Field(
         default=False,

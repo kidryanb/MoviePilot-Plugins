@@ -9,6 +9,8 @@ from .tools import (
     CloudSubscribePerformanceTool,
     CloudSubscribeResourceSearchTool,
     CloudSubscribeResourceSelectTool,
+    CloudSubscribeReviewDecideTool,
+    CloudSubscribeReviewListTool,
     CloudSubscribeStatusTool,
     CloudSubscribeSyncTool,
 )
@@ -22,6 +24,8 @@ __all__ = [
     "CloudSubscribePerformanceTool",
     "CloudSubscribeResourceSearchTool",
     "CloudSubscribeResourceSelectTool",
+    "CloudSubscribeReviewDecideTool",
+    "CloudSubscribeReviewListTool",
     "CloudSubscribeStatusTool",
     "CloudSubscribeSyncTool",
 ]

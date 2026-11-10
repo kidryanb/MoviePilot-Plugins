@@ -675,6 +675,13 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     continue
                                 checked_items.append(entry)
                             matched_items = checked_items
+                            if matched_items and not manual_resources:
+                                # 规则判不准的弱匹配交给 MP 的 AI 裁决；MP 没开 AI 时原样返回
+                                matched_items = self._apply_ai_gate(
+                                    subscribe, mediainfo, season, resource_guard,
+                                    resource, share_url, matched_items,
+                                    is_cross=is_cross_batch,
+                                )
                             if not matched_items:
                                 continue
 

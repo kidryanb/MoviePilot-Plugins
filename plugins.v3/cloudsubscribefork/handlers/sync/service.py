@@ -56,6 +56,8 @@ from .television import TelevisionSyncProcessor
 from .upgrade import UpgradeService
 from .utils import extract_ed2k_filename, format_episode_ranges, subscription_missing_episodes
 from ...utils.episode_guard import SeasonGuard, today_in
+from ...core.ai import MoviePilotLLM, ReviewStore, SeasonAIGate
+from ...core.ai.gate import REJECT, TRANSFER, entry_key
 from ...search.magnet import extract_magnet_hash
 from ..notification import MediaServerNotifier, MediaServerResolver
 from ..search import SearchHandler
@@ -301,6 +303,24 @@ class SyncHandler(DriveScopeMixin):
         self._save_data = _get_val(
             "save_data_func",
             getattr(plugin, "save_data", None) if plugin else None
+        )
+        # AI 季集裁决门：MP 开了 AI 就调用，没开只走规则
+        ai_llm = MoviePilotLLM(str(_get_val("ai_model", "") or ""))
+        self._ai_gate = _get_val("ai_gate", None) or SeasonAIGate(
+            invoke=ai_llm,
+            available=ai_llm.available,
+            mode=str(_get_val("ai_assist_mode", "auto") or "auto"),
+            error_policy=str(_get_val("ai_error_policy", "review") or "review"),
+            reject_policy=str(_get_val("ai_reject_policy", "reject") or "reject"),
+            timeout=float(_get_val("ai_timeout_seconds", 30) or 30),
+            daily_token_budget=int(_get_val("ai_daily_token_budget", 200000) or 0),
+            get_data=self._get_data,
+            save_data=self._save_data,
+        )
+        self._ai_reviews = _get_val("ai_review_store", None) or ReviewStore(
+            self._get_data,
+            self._save_data,
+            expire_days=int(_get_val("ai_review_expire_days", 7) or 7),
         )
         self._should_stop = _get_val(
             "should_stop",
@@ -3017,6 +3037,118 @@ class SyncHandler(DriveScopeMixin):
             date_tolerance_days=self._filename_date_tolerance_days,
             require_season_evidence=self._require_season_evidence,
         )
+
+    def _apply_ai_gate(
+            self,
+            subscribe,
+            mediainfo: MediaInfo,
+            season: int,
+            guard: SeasonGuard,
+            resource: Dict[str, Any],
+            share_url: str,
+            matched_items: List[Dict[str, Any]],
+            is_cross: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """规则放行后、转存前：弱匹配交给 AI 裁决，存疑的进待复核，不转存。"""
+        gate = getattr(self, "_ai_gate", None)
+        if not matched_items or gate is None or not gate.active():
+            return matched_items
+        weak: List[Tuple[int, Dict[str, Any]]] = []
+        for index, entry in enumerate(matched_items):
+            strong, reasons = guard.match_strength(entry["file"], entry["episode"])
+            if strong:
+                continue
+            item = entry["file"]
+            name = str(item.get("name") or "")
+            relative_path = str(item.get("_relative_path") or item.get("relative_path") or "")
+            file_id = str(item.get("id") or item.get("file_id") or item.get("fid") or "")
+            weak.append((index, {
+                "key": entry_key(
+                    getattr(subscribe, "id", ""), season, entry["episode"],
+                    share_url, file_id, name, relative_path,
+                ),
+                "file_id": file_id,
+                "name": name,
+                "relative_path": relative_path,
+                "episode": int(entry["episode"]),
+                "rule_reasons": reasons,
+            }))
+        if not weak:
+            return matched_items
+
+        context = {
+            "title": getattr(mediainfo, "title", "") or getattr(subscribe, "name", ""),
+            "year": getattr(mediainfo, "year", None),
+            "season": int(season),
+            "season_year": guard.season_year,
+            "air_dates": guard.air_date_strings(),
+            "share_title": guard.share_title,
+        }
+        decisions = gate.review(context, [entry for _, entry in weak])
+        dropped: Set[int] = set()
+        new_reviews: List[str] = []
+        for (index, entry), decision in zip(weak, decisions):
+            label = f"S{int(season):02d}E{entry['episode']:02d} {entry['name']}"
+            if decision.action == TRANSFER:
+                logger.info(f"AI 季集裁决放行 {label}：{decision.reason}")
+                continue
+            dropped.add(index)
+            if decision.action == REJECT:
+                logger.info(f"AI 季集裁决拒绝 {label}：{decision.reason}")
+                continue
+            review_id = self._ai_reviews.add({
+                "key": entry["key"],
+                "subscribe_id": getattr(subscribe, "id", None),
+                "title": context["title"],
+                "season": int(season),
+                "episode": entry["episode"],
+                "file_name": entry["name"],
+                "relative_path": entry["relative_path"],
+                "share_title": guard.share_title,
+                "source": str(resource.get("source") or ""),
+                "rule_reasons": entry["rule_reasons"],
+                "ai_verdict": decision.verdict,
+                "ai_reason": decision.reason,
+                "resource": {
+                    "url": share_url,
+                    "title": str(resource.get("title") or guard.share_title or ""),
+                    "source": str(resource.get("source") or ""),
+                    "resource_type": str(
+                        resource.get("resource_type") or resource.get("pan_type") or ""
+                    ),
+                    "is_cross": bool(is_cross),
+                    "target_file_ids": [entry["file_id"]] if entry["file_id"] else [],
+                    "target_file_names": [entry["name"]],
+                    "target_season": int(season),
+                    "target_episodes": [entry["episode"]],
+                    "skip_history": True,
+                },
+            })
+            logger.info(f"AI 季集裁决待复核 {label}：{decision.reason}")
+            if review_id:
+                new_reviews.append(f"{label}（{decision.reason}）")
+        if new_reviews:
+            self._notify_ai_reviews(context["title"], new_reviews)
+        return [entry for index, entry in enumerate(matched_items) if index not in dropped]
+
+    def _notify_ai_reviews(self, title: str, lines: List[str]) -> None:
+        if not self._post_message:
+            return
+        shown = lines[:10]
+        if len(lines) > 10:
+            shown.append(f"... 等共 {len(lines)} 个")
+        try:
+            self._post_message(
+                mtype=self._notification_type,
+                title=f"网盘订阅助手：{title} 有 {len(lines)} 个文件待复核",
+                text=(
+                    "这些文件规则判不准，AI 也没把握，暂不转存：\n"
+                    + "\n".join(shown)
+                    + "\n\n在 MoviePilot 的 AI 助手里说「查看网盘订阅待复核」即可放行或拒绝。"
+                ),
+            )
+        except Exception as error:
+            logger.debug(f"待复核通知发送失败：{error}")
 
     def _mp_subscription_missing(
             self,
