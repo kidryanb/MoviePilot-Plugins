@@ -2937,7 +2937,6 @@ class SyncHandler(DriveScopeMixin):
                 return True
         return success
 
-    @staticmethod
     def _mp_subscription_missing(
             self,
             subscribe,
