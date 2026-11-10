@@ -54,7 +54,7 @@ from .rule_scoring import UpgradeRuleScoringService
 from .subtitles import SubtitleService
 from .television import TelevisionSyncProcessor
 from .upgrade import UpgradeService
-from .utils import extract_ed2k_filename, format_episode_ranges
+from .utils import extract_ed2k_filename, format_episode_ranges, subscription_missing_episodes
 from ...search.magnet import extract_magnet_hash
 from ..notification import MediaServerNotifier, MediaServerResolver
 from ..search import SearchHandler
@@ -2938,36 +2938,44 @@ class SyncHandler(DriveScopeMixin):
         return success
 
     @staticmethod
-    def _reconcile_subscribe_physical_episodes(
+    def _mp_subscription_missing(
+            self,
             subscribe,
-            episodes: Set[int],
-            start_episode: int,
-            total_episode: int,
-    ) -> Dict[str, Any]:
-        """以 Emby 与115实际数据纠正订阅进度，包括移除误标集数。"""
-        expected = set(range(start_episode, total_episode + 1))
-        verified = {int(episode) for episode in episodes} & expected
-        current = {
-            int(episode) for episode in (subscribe.note or [])
-            if str(episode).isdigit()
-        }
-        new_note = sorted(verified)
-        new_lack = len(expected - verified)
-        update_data = {}
-        if current != verified:
-            update_data["note"] = new_note
-        if int(subscribe.lack_episode or 0) != new_lack:
-            update_data["lack_episode"] = new_lack
-        if update_data:
-            SubscribeOper().update(subscribe.id, update_data)
-            subscribe.note = new_note
-            subscribe.lack_episode = new_lack
-        return {
-            "added": sorted(verified - current),
-            "removed": sorted(current - verified),
-            "missing": sorted(expected - verified),
-            "updated": bool(update_data),
-        }
+            mediainfo: MediaInfo,
+            season: int,
+            expected_episodes: Set[int],
+    ) -> Set[int]:
+        """
+        按 MP 自己的口径算订阅缺集：媒体服务器里没有、订阅也没记为已下载的集。
+
+        媒体服务器查询失败时，只按订阅已下载记录（note）计算。
+        """
+        exists, no_exists, checked = None, None, False
+        try:
+            from app.chain.download import DownloadChain
+            from app.sdk.media import MetaInfo
+
+            meta = MetaInfo(str(getattr(subscribe, "name", "") or getattr(mediainfo, "title", "") or ""))
+            meta.type = MediaType.TV
+            meta.begin_season = int(season)
+            media = copy.copy(mediainfo)
+            media.season = int(season)
+            media.seasons = {int(season): sorted(int(value) for value in expected_episodes)}
+            exists, no_exists = DownloadChain().get_no_exists_info(meta=meta, mediainfo=media)
+            checked = True
+        except Exception as error:
+            logger.warning(
+                f"读取 MP 订阅缺集失败，改按订阅已下载记录计算："
+                f"{getattr(subscribe, 'name', '')} S{int(season):02d}，{error}"
+            )
+        return subscription_missing_episodes(
+            expected_episodes,
+            getattr(subscribe, "note", None) or [],
+            int(season),
+            exists=exists,
+            no_exists=no_exists,
+            server_checked=checked,
+        )
 
     def guardian_check(self, all_subs) -> int:
         """

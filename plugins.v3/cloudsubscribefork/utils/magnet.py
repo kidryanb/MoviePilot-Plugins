@@ -95,7 +95,7 @@ def _extract_preview_episodes(
     ))
     for resource_title in resource_texts:
         resource_meta = MetaInfo(
-            title=resource_title,
+            title=MediaFileParser.normalize_split_issue(resource_title),
         )
         parsed_seasons = (
             resource_meta.season_list
@@ -112,7 +112,7 @@ def _extract_preview_episodes(
         file_path = Path(str(file))
         if file_path.suffix.lower() not in settings.RMT_MEDIAEXT:
             continue
-        file_meta = MetaInfo(file_path.name)
+        file_meta = MetaInfo(MediaFileParser.normalize_split_issue(file_path.name))
         if not file_meta.episode_list:
             continue
         file_seasons = (
