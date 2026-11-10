@@ -33,6 +33,23 @@ class QuarkShareService:
         self._transfer_blocked_until = 0.0
         self._transfer_block_reason = ""
 
+    def get_cache_stats(self) -> Dict[str, Any]:
+        with self._share_items_lock:
+            share_files = sum(len(items) for items in self._share_items.values())
+            shares = len(self._share_items)
+        return {
+            "share_tokens": len(list(self._share_tokens.items())),
+            "share_info": shares,
+            "share_files": share_files,
+        }
+
+    def clear_cache(self) -> Dict[str, int]:
+        stats = self.get_cache_stats()
+        with self._share_items_lock:
+            self._share_items.clear()
+            self._share_tokens.clear()
+        return {key: int(value) for key, value in stats.items()}
+
     @property
     def transfer_risk_blocked(self) -> bool:
         """返回转存接口是否因明确的账号风控信号处于熔断期。"""

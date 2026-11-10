@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, FrozenSet
+from typing import Any, Dict, FrozenSet
 
 from .client import QuarkClient
 from .files import QuarkFileService
@@ -38,6 +38,20 @@ class QuarkPlaybackReference:
         return dict(file_item.playback_values)
 
 
+@dataclass(frozen=True)
+class QuarkCacheMaintenance:
+    """汇总夸克目录、路径和分享缓存，供平台缓存统计与清理使用。"""
+
+    files: Any
+    share: Any
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        return {**self.files.get_cache_stats(), **self.share.get_cache_stats()}
+
+    def clear_cache(self) -> Dict[str, int]:
+        return {**self.files.clear_cache(), **self.share.clear_cache()}
+
+
 def create_quark_provider(drive: QuarkDrive) -> CloudDriveProvider:
     files = QuarkFileService(drive.client, drive.page_size)
     share = QuarkShareService(drive.client, files)
@@ -56,12 +70,14 @@ def create_quark_provider(drive: QuarkDrive) -> CloudDriveProvider:
             CloudDriveCapability.DIRECTORY_READ: files,
             CloudDriveCapability.FILE_QUERY: files,
             CloudDriveCapability.FILE_MUTATION: files,
+            CloudDriveCapability.CHECKSUM_RENAME: files,
             CloudDriveCapability.BATCH_FILE_MUTATION: files,
             CloudDriveCapability.PLAYBACK_REFERENCE: playback_reference,
             CloudDriveCapability.LOCAL_UPLOAD: upload,
             CloudDriveCapability.RAPID_UPLOAD: LocalRapidUploadAdapter(upload, files, frozenset({"md5"})),
             CloudDriveCapability.FILE_DOWNLOAD: files,
             CloudDriveCapability.QRCODE_AUTH: QuarkClient,
+            CloudDriveCapability.CACHE_MAINTENANCE: QuarkCacheMaintenance(files, share),
         },
         policy=CloudDrivePolicy(
             pagination_mode="offset",

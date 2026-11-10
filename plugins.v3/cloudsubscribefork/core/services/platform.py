@@ -86,14 +86,26 @@ class PlatformIntegrationService(OwnerDelegator):
         stats: Dict[str, Any] = {}
         if self._search_handler:
             stats["search"] = self._search_handler.get_cache_stats()
-        if self._cloud_drive and self._cloud_drive.supports(
-                CloudDriveCapability.CACHE_MAINTENANCE
-        ):
-            cache_service = self._cloud_drive.require(
-                CloudDriveCapability.CACHE_MAINTENANCE
-            )
-            stats[self._cloud_drive.key] = cache_service.get_cache_stats()
+        for provider in self._cache_drive_providers():
+            try:
+                stats[provider.key] = provider.require(
+                    CloudDriveCapability.CACHE_MAINTENANCE
+                ).get_cache_stats()
+            except Exception as error:
+                logger.debug(f"读取 {provider.name} 缓存统计失败：{error}")
         return stats
+
+    def _cache_drive_providers(self) -> list:
+        """所有已登录且支持缓存维护的网盘（主网盘之外的同盘、中转网盘也算）。"""
+        providers = []
+        registry = getattr(self, "_cloud_drive_registry", None)
+        candidates = list(registry.available()) if registry else []
+        if self._cloud_drive and all(p.key != self._cloud_drive.key for p in candidates):
+            candidates.insert(0, self._cloud_drive)
+        for provider in candidates:
+            if provider and provider.supports(CloudDriveCapability.CACHE_MAINTENANCE):
+                providers.append(provider)
+        return providers
 
     def get_platform_overview(
             self, recent_limit: int = 5, include_runtime: bool = True
