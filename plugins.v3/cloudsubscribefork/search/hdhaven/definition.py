@@ -82,7 +82,7 @@ class HDHavenSourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="hdhaven_base_url",
                         label="服务地址",
-                        placeholder="https://hdhaven.org",
+                        placeholder="https://hdhaven.com",
                         default="https://hdhaven.com",
                         cols=12,
                     ),

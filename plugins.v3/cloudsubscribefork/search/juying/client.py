@@ -3,6 +3,7 @@
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlparse
 
 from app.sdk.logging import logger
 
@@ -28,6 +29,18 @@ class JuyingClient:
     """维护聚影 CSRF、登录令牌和受控 JSON 请求。"""
 
     BASE_URL = "https://www.jying.top"
+    #: 已失效的旧域名，读到时自动换成 BASE_URL（兼容旧版本保存的配置）。
+    LEGACY_HOSTS = frozenset({"juying.tv", "www.juying.tv"})
+
+    @classmethod
+    def normalize_base_url(cls, base_url: Any) -> str:
+        text = str(base_url or "").strip().rstrip("/")
+        if not text:
+            return cls.BASE_URL
+        host = (urlparse(text if "://" in text else f"https://{text}").hostname or "").lower()
+        if host in cls.LEGACY_HOSTS:
+            return cls.BASE_URL
+        return text
     _SESSION_DATA_KEY = "juying_auth_session"
     _LOGIN_LOCK = threading.RLock()
 
@@ -50,7 +63,7 @@ class JuyingClient:
             get_data_func: Optional[Callable] = None,
             save_data_func: Optional[Callable] = None,
     ):
-        self.base_url = str(base_url or self.BASE_URL).rstrip("/")
+        self.base_url = self.normalize_base_url(base_url)
         self.username = str(username or "").strip()
         self.password = str(password or "")
         self._proxies = normalize_proxies(proxy)

@@ -80,8 +80,8 @@ class JuyingSourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="juying_base_url",
                         label="服务地址",
-                        placeholder="https://juying.tv",
-                        default="https://juying.tv",
+                        placeholder="https://www.jying.top",
+                        default="https://www.jying.top",
                         cols=12,
                     ),
                     FieldSpec(

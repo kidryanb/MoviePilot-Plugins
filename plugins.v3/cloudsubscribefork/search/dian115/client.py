@@ -137,9 +137,11 @@ class Dian115Client:
     def matches_config(
             self, email: str, password: str, proxy: Any,
             request_interval: float, unlocks_per_minute: int,
+            base_url: str = "",
     ) -> bool:
         return (
-                self._email == str(email or "").strip()
+                self.base_url == (str(base_url or "").strip() or self.BASE_URL).rstrip("/")
+                and self._email == str(email or "").strip()
                 and self._password == str(password or "").strip()
                 and self._proxies == normalize_proxies(proxy)
                 and self._request_gate.request_interval
