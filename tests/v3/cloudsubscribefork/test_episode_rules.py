@@ -1,5 +1,6 @@
 """综艺上下期集号与 MP 订阅缺集口径的离线测试。"""
 
+import ast
 import importlib.util
 import sys
 import types
@@ -99,6 +100,28 @@ class WiringTest(unittest.TestCase):
         self.assertIn('self._mp_subscription_missing(', television)
         self.assertNotIn('_reconcile_subscribe_physical_episodes', television)
         self.assertNotIn('_reconcile_subscribe_physical_episodes', service)
+
+    def test_mp_missing_is_a_bound_method(self):
+        tree = ast.parse((PLUGIN_DIR / 'handlers/sync/service.py').read_text(encoding='utf-8'))
+        method = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == '_mp_subscription_missing'
+        )
+        self.assertEqual(method.args.args[0].arg, 'self')
+        self.assertEqual(method.decorator_list, [])
+
+    def test_no_static_or_class_method_takes_self(self):
+        """@staticmethod 落在带 self 的方法上，调用时参数会错位（0.5.1 的问题）。"""
+        bad = []
+        for path in sorted(PLUGIN_DIR.rglob('*.py')):
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef) or not node.args.args:
+                    continue
+                names = {getattr(d, 'id', None) for d in node.decorator_list}
+                if 'staticmethod' in names and node.args.args[0].arg == 'self':
+                    bad.append(f'{path.relative_to(PLUGIN_DIR)}:{node.lineno} {node.name}')
+        self.assertEqual(bad, [])
 
     def test_parsers_normalize_split_issue(self):
         for relative in ('utils/file_matcher.py', 'handlers/sync/naming.py', 'utils/magnet.py'):
