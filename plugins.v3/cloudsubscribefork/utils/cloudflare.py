@@ -65,11 +65,15 @@ def platform_setting(name: str, default: Any = None) -> Any:
 IDLE_RELEASE_SECONDS = 120.0
 #: 空闲看门狗最长轮询间隔（秒）。
 _WATCHDOG_MAX_INTERVAL_SECONDS = 5.0
-#: 质询页正文特征。
+#: 质询页正文特征：只收拦截页独有的标记。
+#: 过盾后的正常页面仍会加载 ``/cdn-cgi/challenge-platform/scripts/jsd/main.js``，
+#: 有的页面还内嵌 Turnstile 组件（``challenges.cloudflare.com``），这两类不能算质询。
 _CHALLENGE_MARKERS = (
-    "cf-chl-", "challenges.cloudflare.com", "cf-browser-verification",
-    "cdn-cgi/challenge-platform", "enable javascript and cookies",
-    "<title>just a moment", "verify you are human", "checking your browser",
+    "<title>just a moment", "id=\"challenge-form\"", "id='challenge-form'",
+    "cf_chl_opt", "cf-chl-widget", "cf-browser-verification",
+    "challenge-platform/h/", "orchestrate/chl_page", "orchestrate/managed",
+    "verify you are human", "checking your browser",
+    "enable javascript and cookies to continue",
 )
 #: 403/503 + server: cloudflare 时的拦截页特征。
 _BLOCK_MARKERS = (
