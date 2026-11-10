@@ -27,6 +27,15 @@ from .action import ServerActionProtocol, ServerActionResponse
 from .parser import decode_embedded_text, response_body, response_text
 
 BASE_URL = "https://re0.me"
+#: 允许的 HDHive 站点主机：默认站点 + 用户配置的镜像（客户端创建时登记）。
+_KNOWN_HOSTS = {"re0.me"}
+
+
+def register_host(base_url: str) -> None:
+    """登记配置的 HDHive 站点主机，安全检查跳转到该主机时才会被接受。"""
+    host = (urlsplit(str(base_url or "")).hostname or "").lower()
+    if host:
+        _KNOWN_HOSTS.add(host)
 ALPHABET = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 CHALLENGE_PATH = "/security-check"
 TEXT_TOP = 20
@@ -470,7 +479,12 @@ class HDHiveCaptchaRecognizer:
 
 
 class HDHiveCaptchaSolver:
-    """处理 security-check 重定向、识别、刷新与提交。"""
+    """处理 security-check 重定向、识别、刷新与提交。
+
+    ``BASE_URL`` 默认是官方站点；客户端按配置的地址派生子类覆盖它。
+    """
+
+    BASE_URL = BASE_URL
 
     def __init__(
             self,
@@ -517,12 +531,12 @@ class HDHiveCaptchaSolver:
                     error_code == "ABUSE_CHALLENGE_REQUIRED"
                     and UUID_RE.fullmatch(challenge_id)
             ):
-                return f"{BASE_URL}{CHALLENGE_PATH}?challenge={challenge_id}"
+                return f"{cls.BASE_URL}{CHALLENGE_PATH}?challenge={challenge_id}"
         normalized = decode_embedded_text(response_text(response))
         redirect = NEXT_REDIRECT_RE.search(normalized)
         if redirect:
             candidate = cls._valid_challenge_url(
-                urljoin(f"{BASE_URL}/", redirect.group(1).lstrip("/"))
+                urljoin(f"{cls.BASE_URL}/", redirect.group(1).lstrip("/"))
             )
             if candidate:
                 return candidate
@@ -530,7 +544,7 @@ class HDHiveCaptchaSolver:
                 r"/security-check\?challenge=[0-9a-fA-F-]{36}[^\"'<> ]*",
                 normalized,
         ):
-            candidate = cls._valid_challenge_url(urljoin(BASE_URL, matched))
+            candidate = cls._valid_challenge_url(urljoin(cls.BASE_URL, matched))
             if candidate:
                 return candidate
         return ""
@@ -541,7 +555,7 @@ class HDHiveCaptchaSolver:
         challenge_id = parse_qs(parsed.query).get("challenge", [""])[0]
         if (
                 parsed.scheme == "https"
-                and parsed.hostname == "re0.me"
+                and (parsed.hostname or "").lower() in _KNOWN_HOSTS
                 and parsed.path == CHALLENGE_PATH
                 and UUID_RE.fullmatch(challenge_id)
         ):
@@ -552,10 +566,10 @@ class HDHiveCaptchaSolver:
     def is_challenge_response(cls, response) -> bool:
         return bool(cls.challenge_url(response))
 
-    @staticmethod
-    def _safe_path(value: str, fallback: str = "/") -> str:
-        resolved = urlsplit(urljoin(f"{BASE_URL}/", str(value or "").lstrip("/")))
-        if resolved.scheme != "https" or resolved.hostname != "re0.me":
+    @classmethod
+    def _safe_path(cls, value: str, fallback: str = "/") -> str:
+        resolved = urlsplit(urljoin(f"{cls.BASE_URL}/", str(value or "").lstrip("/")))
+        if resolved.scheme != "https" or (resolved.hostname or "").lower() not in _KNOWN_HOSTS:
             return fallback
         path = resolved.path or "/"
         return f"{path}?{resolved.query}" if resolved.query else path

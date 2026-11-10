@@ -8,12 +8,12 @@ import re
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlparse, urlsplit
 
 from app.sdk.logging import logger
 
 from .action import ServerActionProtocol, ServerActionResponse
-from .captcha import HDHiveCaptchaError, HDHiveCaptchaSolver
+from .captcha import HDHiveCaptchaError, HDHiveCaptchaSolver, register_host
 from .parser import page_account_snapshot, response_body, response_text
 from .security import (
     HDHiveSecurityProtocol,
@@ -132,7 +132,10 @@ class HDHiveClient:
             should_stop: Optional[Callable[[], bool]] = None,
             get_data_func: Optional[Callable] = None,
             save_data_func: Optional[Callable] = None,
+            base_url: Optional[str] = None,
     ):
+        # 实例属性覆盖类默认值，后续所有请求、Referer、Cookie 域都按配置的站点地址走
+        self.BASE_URL = self.normalize_base_url(base_url)
         self._username = str(username or "").strip()
         self._password = str(password or "")
         self._proxies = normalize_proxies(proxy)
@@ -196,7 +199,12 @@ class HDHiveClient:
             max_requests_per_window=self._MAX_REQUESTS_PER_MINUTE,
             request_window_seconds=60.0,
         )
-        self._captcha = HDHiveCaptchaSolver(
+        register_host(self.BASE_URL)
+        solver_type = (
+            HDHiveCaptchaSolver if self.BASE_URL == HDHiveCaptchaSolver.BASE_URL
+            else type("HDHiveCaptchaSolver", (HDHiveCaptchaSolver,), {"BASE_URL": self.BASE_URL})
+        )
+        self._captcha = solver_type(
             self._raw_request,
             server_actions=self._server_actions,
         )
@@ -223,13 +231,27 @@ class HDHiveClient:
             logger.warning(f"读取 HDHive 停止状态失败：{error}")
             return False
 
+    @classmethod
+    def normalize_base_url(cls, base_url: Any) -> str:
+        """配置的站点地址；留空或不是 http(s) 地址时用默认值。"""
+        text = str(base_url or "").strip().rstrip("/")
+        if not text:
+            return cls.BASE_URL
+        if "://" not in text:
+            text = f"https://{text}"
+        parsed = urlparse(text)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return cls.BASE_URL
+        return text
+
     def matches_config(
             self, username: str, password: str, proxy: Any,
-            request_interval: float,
+            request_interval: float, base_url: Optional[str] = None,
     ) -> bool:
         """判断现有认证会话能否复用于当前配置。"""
         return (
-                self._username == str(username or "").strip()
+                self.BASE_URL == self.normalize_base_url(base_url)
+                and self._username == str(username or "").strip()
                 and self._password == str(password or "")
                 and self._proxies == normalize_proxies(proxy)
                 and self._request_gate.request_interval
@@ -619,7 +641,7 @@ class HDHiveClient:
                 self._session.cookies.set(
                     str(cookie.get("name") or ""),
                     str(cookie.get("value") or ""),
-                    domain=str(cookie.get("domain") or "re0.me"),
+                    domain=str(cookie.get("domain") or urlparse(self.BASE_URL).hostname or "re0.me"),
                     path=str(cookie.get("path") or "/"),
                     secure=bool(cookie.get("secure", True)),
                 )

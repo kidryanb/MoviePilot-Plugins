@@ -54,12 +54,14 @@ class Dian115SearchService(OwnerDelegator):
                     proxy,
                     self._dian115_request_interval,
                     self._dian115_unlocks_per_minute,
+                    getattr(self, "_dian115_base_url", ""),
             ):
                 if client:
                     client.close()
                 client = Dian115Client(
                     email=self._dian115_email,
                     password=self._dian115_password,
+                    base_url=getattr(self, "_dian115_base_url", "") or Dian115Client.BASE_URL,
                     proxy=proxy,
                     request_interval=self._dian115_request_interval,
                     unlocks_per_minute=self._dian115_unlocks_per_minute,

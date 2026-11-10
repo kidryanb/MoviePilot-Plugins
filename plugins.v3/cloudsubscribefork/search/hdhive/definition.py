@@ -61,6 +61,7 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
         owner._hdhive_client = value("hdhive_client")
         owner._hdhive_username = str(value("hdhive_username", "") or "")
         owner._hdhive_password = str(value("hdhive_password", "") or "")
+        owner._hdhive_base_url = str(value("hdhive_base_url", "") or "").strip()
         mode = str(value("hdhive_query_mode", "web") or "web").lower()
         owner._hdhive_query_mode = mode if mode in {"api", "web"} else "web"
         owner._hdhive_auto_unlock = bool(value("hdhive_auto_unlock", False))
@@ -139,9 +140,10 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
         username = str(config.get("hdhive_username") or "")
         password = str(config.get("hdhive_password") or "")
         request_interval = float(config.get("hdhive_request_interval", 5) or 5)
+        base_url = str(config.get("hdhive_base_url") or "").strip()
         with cls._test_clients_lock:
             for client in cls._test_clients:
-                if client.matches_config(username, password, proxy, request_interval):
+                if client.matches_config(username, password, proxy, request_interval, base_url):
                     result.update({
                         "hdhive_web_client": client,
                         "hdhive_web_client_owned": False,
@@ -152,6 +154,7 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
                 password=password,
                 proxy=proxy,
                 request_interval=request_interval,
+                base_url=base_url,
             )
             owned = len(cls._test_clients) >= cls._TEST_CLIENT_LIMIT
             if not owned:
@@ -407,6 +410,7 @@ class HDHiveSourceDefinition(SearchSourceDefinition):
             username=username,
             password=password,
             proxy=proxy,
+            base_url=str(cls.config_value(config, "hdhive_base_url", "") or ""),
             request_interval=float(cls.config_value(config, "hdhive_request_interval", 5) or 5),
             get_data_func=getattr(owner, "get_data", None),
             save_data_func=getattr(owner, "save_data", None),

@@ -384,7 +384,9 @@ class MediaServerNotifier:
         return self._media_server_path(moviepilot_path)
 
     def notify_deleted_path(self, path: Path, record: Dict[str, Any]) -> bool:
-        """按已删除历史记录的路径刷新媒体服务器目录。"""
+        """按已删除历史记录的路径刷新媒体服务器目录；入库通知总开关关闭时不发送。"""
+        if not self.enabled:
+            return True
         try:
             media_type = MediaType(str(record.get("type") or ""))
         except ValueError:
@@ -400,7 +402,6 @@ class MediaServerNotifier:
             path,
             media_info,
             file_name=str(record.get("file_name") or ""),
-            force=True,
             deleted=True,
         )
 

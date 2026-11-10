@@ -322,8 +322,25 @@ class StrmGenerator:
             cloud_dir=cloud_dir,
             file_name=file_name,
         )
-        strm_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = strm_path.with_suffix(f"{strm_path.suffix}.tmp")
-        temp_path.write_text(content, encoding="utf-8")
-        temp_path.replace(strm_path)
+        self.write_in_place(strm_path, content)
         return strm_path, content
+
+    @staticmethod
+    def write_in_place(strm_path: Path, content: str) -> bool:
+        """写入 STRM，内容未变则不写；变化时原地覆盖以保留 inode，硬链接的库内副本同步更新。
+
+        返回是否实际写入。
+        """
+        strm_path.parent.mkdir(parents=True, exist_ok=True)
+        data = content.encode("utf-8")
+        try:
+            if strm_path.is_file() and strm_path.read_bytes() == data:
+                return False
+        except OSError:
+            pass
+        with open(strm_path, "r+b" if strm_path.is_file() else "wb") as handle:
+            handle.seek(0)
+            handle.write(data)
+            handle.truncate()
+            handle.flush()
+        return True

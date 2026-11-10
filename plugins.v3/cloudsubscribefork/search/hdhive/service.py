@@ -165,17 +165,20 @@ class HDHiveSearchService(OwnerDelegator):
         proxy = owner_source_proxy(self, "hdhive")
         with self._hdhive_web_lock:
             client = self._hdhive_web_client
+            base_url = getattr(self, "_hdhive_base_url", "")
             if client is None or not client.matches_config(
                     self._hdhive_username,
                     self._hdhive_password,
                     proxy,
                     self._hdhive_request_interval,
+                    base_url,
             ):
                 if client and self._hdhive_web_client_owned:
                     client.close()
                 client = HDHiveClient(
                     username=self._hdhive_username,
                     password=self._hdhive_password,
+                    base_url=base_url,
                     proxy=proxy,
                     request_interval=self._hdhive_request_interval,
                     should_stop=self._stop_requested,

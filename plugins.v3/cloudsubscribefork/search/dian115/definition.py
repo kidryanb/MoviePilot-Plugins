@@ -30,6 +30,7 @@ class Dian115SourceDefinition(SearchSourceDefinition):
         value = lambda key, default=None: cls.config_value(owner.__dict__, key, default)
         owner._dian115_email = str(value("dian115_email", "") or "").strip()
         owner._dian115_password = str(value("dian115_password", "") or "").strip()
+        owner._dian115_base_url = str(value("dian115_base_url", "") or "").strip()
         owner._dian115_auto_unlock = bool(value("dian115_auto_unlock", False))
         owner._dian115_max_unlock_points = max(0, int(value("dian115_max_unlock_points", 50) or 0))
         owner._dian115_max_points_per_sub = max(0, int(value("dian115_max_points_per_sub", 20) or 0))
@@ -108,7 +109,7 @@ class Dian115SourceDefinition(SearchSourceDefinition):
                     FieldSpec(
                         key="dian115_base_url",
                         label="服务地址",
-                        placeholder="https://115.dian.me",
+                        placeholder="https://m.dian115.com",
                         default="https://m.dian115.com",
                         cols=12,
                     ),
@@ -232,6 +233,7 @@ class Dian115SourceDefinition(SearchSourceDefinition):
         return Dian115Client(
             email=email,
             password=password,
+            base_url=str(cls.config_value(config, "dian115_base_url", "") or "").strip() or Dian115Client.BASE_URL,
             proxy=ctx.get("proxy"),
             request_interval=float(cls.config_value(config, "dian115_request_interval", 1.0) or 1.0),
             unlocks_per_minute=int(cls.config_value(config, "dian115_unlocks_per_minute", 6) or 6),

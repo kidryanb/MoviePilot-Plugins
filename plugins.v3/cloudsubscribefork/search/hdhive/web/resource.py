@@ -125,7 +125,12 @@ class _UnlockLimiter:
 class HDHiveResourceService:
     """负责 HDHive 资源查询、解析、缓存和解锁。"""
 
-    BASE_URL = "https://re0.me"
+    @property
+    def BASE_URL(self) -> str:  # noqa: N802 - 保持原有属性名
+        """跟随客户端配置的站点地址。"""
+        return str(getattr(getattr(self, "_client", None), "BASE_URL", "") or self.DEFAULT_BASE_URL)
+
+    DEFAULT_BASE_URL = "https://re0.me"
     _RESOURCE_CACHE_TTL = 5 * 60
     _RESOURCE_CACHE_LIMIT = 128
     _RESOURCE_LOCKS = tuple(threading.Lock() for _ in range(64))
