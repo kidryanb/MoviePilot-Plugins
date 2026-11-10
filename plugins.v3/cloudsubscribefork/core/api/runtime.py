@@ -196,15 +196,13 @@ class RuntimeApi(OwnerDelegator):
                 if self._search_handler:
                     counts.update(self._search_handler.clear_search_cache())
                 counts["magnet_metadata"] = clear_magnet_metadata_cache()
-            if "cloud" in categories and (
-                    self._cloud_drive and self._cloud_drive.supports(
-                    CloudDriveCapability.CACHE_MAINTENANCE
-            )
-            ):
-                cache_service = self._cloud_drive.require(
-                    CloudDriveCapability.CACHE_MAINTENANCE
-                )
-                counts.update(cache_service.clear_cache())
+            if "cloud" in categories:
+                for provider in self._cache_drive_providers():
+                    cleared = provider.require(
+                        CloudDriveCapability.CACHE_MAINTENANCE
+                    ).clear_cache()
+                    for key, value in (cleared or {}).items():
+                        counts[f"{provider.key}_{key}"] = int(value or 0)
             if "sync" in categories and self._sync_handler:
                 counts.update(self._sync_handler.clear_runtime_cache())
             if "interface" in categories:

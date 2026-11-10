@@ -225,6 +225,63 @@ class QuarkFileService(CloudDriveFileServiceBase):
                 self._invalidate_path_cache()
         return success
 
+    CHECKSUM_ALGORITHMS = frozenset({"md5", "fid"})
+
+    def rename_file_by_checksum(
+            self, path: str, checksum: str, target_name: str,
+            algorithm: str = "md5", attempts: int = 1, interval: float = 1.5,
+            **kwargs: Any,
+    ) -> bool:
+        """按 md5 或 fid 在目录里定位文件并改名；夸克没有 sha1，不能照搬 115 的写法。"""
+        if not target_name:
+            return True
+        algorithm = str(algorithm or "md5").strip().lower()
+        if algorithm not in self.CHECKSUM_ALGORITHMS:
+            raise ValueError("夸克网盘只支持按 md5 或 fid 定位文件")
+        expected = str(checksum or "").strip()
+        if algorithm == "md5":
+            expected = expected.lower()
+            if len(expected) != 32:
+                logger.info(f"夸克文件 md5 无效，暂无法按校验和改名：{target_name}")
+                return False
+        elif not expected:
+            return False
+        total_attempts = max(1, int(attempts or 1))
+        for attempt in range(total_attempts):
+            lookup = self.resolve_directory(path)
+            if not lookup.checked or lookup.directory_id is None:
+                logger.warning(f"夸克目录不存在，无法按校验和改名：{path}")
+                return False
+            self._invalidate_directory_cache()
+            files = [item for item in self._list(str(lookup.directory_id)) if not item.is_directory]
+            if any(item.name == target_name for item in files):
+                return True
+            for item in files:
+                value = item.id if algorithm == "fid" else str(item.md5 or "").strip().lower()
+                if value != expected:
+                    continue
+                if self.rename_file(path, item, target_name):
+                    logger.info(f"夸克文件按校验和改名成功：{item.name} -> {target_name}")
+                    return True
+                logger.error(f"夸克文件改名失败：{item.name} -> {target_name}")
+                return False
+            if attempt + 1 < total_attempts:
+                time.sleep(max(0.0, float(interval)))
+        logger.info(f"夸克目录里没找到 {algorithm}={expected} 的文件：{path}")
+        return False
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        return {
+            "path": self._get_directory_path_cache().stats(),
+            "directories": len(list(self._directory_cache.items())),
+        }
+
+    def clear_cache(self) -> Dict[str, int]:
+        directories = len(list(self._directory_cache.items()))
+        paths = int(self._get_directory_path_cache().stats().get("entries") or 0)
+        self.refresh_directories()
+        return {"path": paths, "directories": directories}
+
     def move_file(
             self, item: CloudFile, save_path: str, target_name: str
     ) -> Optional[CloudFile]:
