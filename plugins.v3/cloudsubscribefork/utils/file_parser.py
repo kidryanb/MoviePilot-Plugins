@@ -1,8 +1,9 @@
 """媒体文件树展开与季集标记解析。"""
 
+import datetime
 import re
 from pathlib import Path
-from typing import Any, Iterator, Optional, Tuple
+from typing import Any, Iterator, Optional, Set, Tuple
 
 
 class MediaFileParser:
@@ -17,11 +18,23 @@ class MediaFileParser:
 
     _SXEX_PATTERN = re.compile(r"[Ss](\d{1,2})[Ee](\d{1,4})")
     _SEASON_EPISODE_PATTERN = re.compile(r"[Ss](\d{1,2})[Ee]")
-    _CN_SEASON_PATTERN = re.compile(r"第\s*(\d{1,2})\s*季")
-    _EN_SEASON_PATTERN = re.compile(r"[Ss]eason\s*(\d{1,2})", re.IGNORECASE)
+    _CN_SEASON_PATTERN = re.compile(r"第\s*([0-9零一二两三四五六七八九十]{1,4})\s*季")
+    _EN_SEASON_PATTERN = re.compile(r"[Ss]eason[\s._-]*(\d{1,2})(?!\d)", re.IGNORECASE)
+    #: 独立的 S2 / S02（后面不跟 E 集号），前面不能是字母数字，避免误伤 MP4S2 这类字符串
+    _BARE_SEASON_PATTERN = re.compile(r"(?<![A-Za-z0-9])[Ss](\d{1,2})(?![0-9EeA-Za-z])")
     ANY_SEASON_PATTERN = re.compile(
-        r"[Ss]\d+[Ee]|第\s*\d+\s*季|[Ss]eason\s*\d+", re.IGNORECASE
+        r"[Ss]\d+[Ee]|第\s*[0-9零一二两三四五六七八九十]{1,4}\s*季|[Ss]eason[\s._-]*\d+"
+        r"|(?<![A-Za-z0-9])[Ss]\d{1,2}(?![0-9EeA-Za-z])",
+        re.IGNORECASE,
     )
+    #: 文件名日期：20241130、2025.12.06、2025-12-06、2026.11.1、2026年11月8日
+    _COMPACT_DATE_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)")
+    _SEPARATED_DATE_PATTERN = re.compile(
+        r"(?<!\d)((?:19|20)\d{2})\s*[.\-_/年]\s*(\d{1,2})\s*[.\-_/月]\s*(\d{1,2})(?!\d)"
+    )
+    _YEAR_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+    #: 只有「第N期」、没有上/下
+    _BARE_ISSUE_PATTERN = re.compile(r"第\s*([0-9零一二两三四五六七八九十]{1,4})\s*期")
     #: 综艺「第N期上/下」：TMDB 通常把每期拆成两集，上 = 2N-1，下 = 2N。
     SPLIT_ISSUE_ENABLED = True
     _SPLIT_ISSUE_PATTERN = re.compile(
@@ -81,28 +94,68 @@ class MediaFileParser:
         return ext in cls.SUBTITLE_EXTENSIONS or ext.lstrip(".") in cls.SUBTITLE_EXTENSIONS
 
     @classmethod
+    def season_numbers(cls, text: str) -> Set[int]:
+        """文本里出现的所有季号：S04E11、第四季、第4季、Season 4、独立的 S4/S04。"""
+        value = str(text or "")
+        seasons: Set[int] = set()
+        for match in cls._SEASON_EPISODE_PATTERN.finditer(value):
+            seasons.add(int(match.group(1)))
+        for match in cls._CN_SEASON_PATTERN.finditer(value):
+            number = cls._issue_number(match.group(1))
+            if number:
+                seasons.add(number)
+        for pattern in (cls._EN_SEASON_PATTERN, cls._BARE_SEASON_PATTERN):
+            for match in pattern.finditer(value):
+                seasons.add(int(match.group(1)))
+        seasons.discard(0)
+        return seasons
+
+    @classmethod
     def contains_other_season(cls, file_name: str, target_season: int) -> bool:
-        for pattern in (
-                cls._SEASON_EPISODE_PATTERN,
-                cls._CN_SEASON_PATTERN,
-                cls._EN_SEASON_PATTERN,
-        ):
-            match = pattern.search(file_name)
-            if match:
-                return int(match.group(1)) != target_season
-        return False
+        """写了季号，但其中没有目标季。"""
+        seasons = cls.season_numbers(file_name)
+        return bool(seasons) and int(target_season) not in seasons
 
     @classmethod
     def matches_target_season(cls, file_name: str, target_season: int) -> bool:
-        for pattern in (
-                cls._SEASON_EPISODE_PATTERN,
-                cls._CN_SEASON_PATTERN,
-                cls._EN_SEASON_PATTERN,
-        ):
-            match = pattern.search(file_name)
-            if match:
-                return int(match.group(1)) == target_season
-        return False
+        return int(target_season) in cls.season_numbers(file_name)
+
+    @classmethod
+    def extract_date(cls, text: str) -> Optional[datetime.date]:
+        """文件名里的播出日期前缀（第一个合法日期）。"""
+        value = str(text or "")
+        found = []
+        for pattern in (cls._SEPARATED_DATE_PATTERN, cls._COMPACT_DATE_PATTERN):
+            for match in pattern.finditer(value):
+                try:
+                    parsed = datetime.date(
+                        int(match.group(1)), int(match.group(2)), int(match.group(3))
+                    )
+                except ValueError:
+                    continue
+                found.append((match.start(), parsed))
+        return min(found)[1] if found else None
+
+    @classmethod
+    def extract_years(cls, text: str) -> Set[int]:
+        """文本里独立出现的年份（含日期里的年份，不含 2160p 这类数字）。"""
+        value = str(text or "")
+        years = {int(match.group(1)) for match in cls._YEAR_PATTERN.finditer(value)}
+        date = cls.extract_date(value)
+        if date:
+            years.add(date.year)
+        return years
+
+    @classmethod
+    def bare_issue_number(cls, file_name: str) -> Optional[int]:
+        """只有「第N期」、没有上/下标记时返回 N；有上/下或没有期号时返回 None。"""
+        text = str(file_name or "")
+        if "期" not in text or cls._SPLIT_ISSUE_PATTERN.search(text):
+            return None
+        match = cls._BARE_ISSUE_PATTERN.search(text)
+        if not match:
+            return None
+        return cls._issue_number(match.group(1))
 
     @classmethod
     def _issue_number(cls, text: str) -> Optional[int]:

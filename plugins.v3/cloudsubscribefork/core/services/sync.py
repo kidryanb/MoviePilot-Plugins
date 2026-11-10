@@ -1,6 +1,7 @@
 """订阅同步执行与并发编排。"""
 
 import time
+from types import SimpleNamespace
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from threading import Event as ThreadEvent, Thread
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -197,13 +198,36 @@ class SyncExecutionService(OwnerDelegator):
                 set(range(start_episode, total_episode + 1))
                 if is_tv and total_episode >= start_episode else set()
             )
+            aired_episodes = sorted(expected_episodes)
+            unreleased_episodes: List[int] = []
+            defer_until = ""
+            handler = self._sync_handler
+            if (
+                    is_tv and expected_episodes and handler
+                    and getattr(handler, "_filter_unaired_episodes", False)
+                    and not getattr(subscribe, "_transient_target", False)
+            ):
+                # 播出日历：整季都没播出的订阅本轮直接延期，不进搜索队列
+                try:
+                    season = int(getattr(subscribe, "season", 1) or 1)
+                    guard = handler._season_guard(
+                        subscribe,
+                        SimpleNamespace(tmdb_id=tmdb_id_of(subscribe), season_years={}, year=None),
+                        season,
+                    )
+                    if guard.air_dates:
+                        aired_episodes, unreleased_episodes = guard.split_aired(expected_episodes)
+                        next_date = guard.next_air_date(unreleased_episodes)
+                        defer_until = next_date.isoformat() if next_date else ""
+                except Exception as error:
+                    logger.debug(f"订阅播出日历读取失败，不延期：{error}")
             preparation = {
                 "tmdb_id": int(tmdb_id_of(subscribe) or 0),
                 "expected_episodes": sorted(expected_episodes),
-                "aired_target_episodes": sorted(expected_episodes),
-                "unreleased_episodes": [],
-                "all_targets_future": False,
-                "defer_until": "",
+                "aired_target_episodes": list(aired_episodes),
+                "unreleased_episodes": list(unreleased_episodes),
+                "all_targets_future": bool(expected_episodes) and not aired_episodes,
+                "defer_until": defer_until,
             }
             setattr(subscribe, "_cloudsubscribe_preparation", preparation)
             return subscribe
