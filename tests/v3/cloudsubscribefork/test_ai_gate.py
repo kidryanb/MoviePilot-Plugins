@@ -417,5 +417,48 @@ class ApplyGateWiringTest(unittest.TestCase):
         self.assertEqual(self.messages, [])
 
 
+class MoviePilotLLMAvailabilityTest(unittest.TestCase):
+    """脱离 MP 进程时 LLM 运行时未组装：available() 必须是 False，同步只走规则。"""
+
+    def setUp(self):
+        self.settings = {'AI_AGENT_ENABLE': True, 'LLM_MODEL': 'deepseek-flash'}
+        self.assembled = [False]
+
+        def resolve():
+            if not self.assembled[0]:
+                raise RuntimeError('LLM provider 运行时尚未由启动层完成组装')
+            return object()
+
+        _module('app.runtime')
+        _module('app.runtime.settings', get_runtime_setting=lambda name: self.settings.get(name))
+        _module('app.agent')
+        _module('app.agent.llm')
+        _module('app.agent.llm.helper', LLMHelper=object())
+        _module('app.agent.llm.gateway', resolve_llm_provider_runtime=resolve)
+        self.llm_module = _load(f'{PKG}.core.ai.llm', 'core/ai/llm.py')
+
+    def tearDown(self):
+        for name in ('app.runtime.settings', 'app.runtime', 'app.agent.llm.gateway',
+                     'app.agent.llm.helper', 'app.agent.llm', 'app.agent'):
+            sys.modules.pop(name, None)
+
+    def test_unassembled_runtime_is_unavailable(self):
+        self.assertFalse(self.llm_module.MoviePilotLLM().available())
+
+    def test_assembled_runtime_is_available(self):
+        self.assembled[0] = True
+        self.assertTrue(self.llm_module.MoviePilotLLM().available())
+
+    def test_agent_disabled_is_unavailable(self):
+        self.assembled[0] = True
+        self.settings['AI_AGENT_ENABLE'] = False
+        self.assertFalse(self.llm_module.MoviePilotLLM().available())
+
+    def test_selftest_endpoint_is_registered(self):
+        registration = (PLUGIN_DIR / 'core/api/registration.py').read_text(encoding='utf-8')
+        self.assertIn('"/ai/selftest"', registration)
+        self.assertIn('self.api_ai_selftest', registration)
+
+
 if __name__ == '__main__':
     unittest.main()

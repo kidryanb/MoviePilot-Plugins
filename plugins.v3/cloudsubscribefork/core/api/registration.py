@@ -93,6 +93,13 @@ class MoviePilotRegistration(OwnerDelegator):
                 "auth": "apikey",
             },
             {
+                "path": "/ai/selftest",
+                "endpoint": self.api_ai_selftest,
+                "methods": ["GET"],
+                "auth": "apikey",
+                "summary": "AI 季集裁决自检（不转存）",
+            },
+            {
                 "path": "/relay/link",
                 "endpoint": self.api_relay_link,
                 "methods": ["GET"],

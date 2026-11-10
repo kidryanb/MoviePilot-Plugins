@@ -49,6 +49,15 @@ def _llm_helper():
     return LLMHelper
 
 
+def _check_provider_runtime() -> None:
+    """LLM provider 运行时由 MP 启动层组装；脱离 MP 进程（如单独跑 python）时没有，调用必然失败。"""
+    try:
+        from app.agent.llm.gateway import resolve_llm_provider_runtime
+    except ImportError:
+        return  # 旧版 MP 没有这一层
+    resolve_llm_provider_runtime()
+
+
 class MoviePilotLLM:
     """一次不带工具的文本调用；在独立线程和事件循环里跑，适合同步任务调用。"""
 
@@ -63,6 +72,7 @@ class MoviePilotLLM:
             return False
         try:
             _llm_helper()
+            _check_provider_runtime()
         except Exception as error:
             if not self._warned:
                 self._warned = True
