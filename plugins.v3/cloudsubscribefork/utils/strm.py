@@ -2,7 +2,7 @@
 import re
 from pathlib import Path, PurePosixPath
 from string import Formatter
-from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 
@@ -116,6 +116,51 @@ class StrmGenerator:
         """服务器中转地址（http/https，去掉末尾斜杠）；格式不对时返回空串。"""
         text = str(value or "").strip().rstrip("/")
         return text if re.match(r"^https?://[^/\s]+", text) else ""
+
+    @classmethod
+    def relay_candidates(cls, primary: Any, extra: Any = "") -> List[Dict[str, str]]:
+        """
+        服务器中转地址列表（为多地区中转预留）。
+
+        第一项是原来的「服务器中转地址」（名称 default）；``extra`` 每行一个，
+        格式 ``名称|地区|URL``、``名称|URL`` 或只写 ``URL``，# 开头的行忽略。格式不对的行跳过。
+        """
+        items: List[Dict[str, str]] = []
+        seen = set()
+
+        def add(name: str, region: str, url: Any) -> None:
+            base = cls.relay_base_url(url)
+            if base and base not in seen:
+                seen.add(base)
+                items.append({"name": name, "region": region, "url": base})
+
+        add("default", "", primary)
+        lines = extra if isinstance(extra, (list, tuple)) else str(extra or "").splitlines()
+        for index, line in enumerate(lines, 1):
+            text = str(line or "").strip()
+            if not text or text.startswith("#"):
+                continue
+            parts = [part.strip() for part in text.split("|")]
+            url = parts[-1]
+            name = parts[0] if len(parts) >= 2 and parts[0] else f"relay{index}"
+            region = parts[1] if len(parts) >= 3 else ""
+            add(name, region, url)
+        return items
+
+    @classmethod
+    def pick_relay_url(cls, primary: Any, extra: Any = "", choice: Any = "") -> str:
+        """
+        按「手动选择」挑一个中转地址写进 STRM：``choice`` 填名称或地区（不分大小写）。
+
+        没填或没匹配上时用原来的「服务器中转地址」，它也没填时用列表第一项；都没有返回空串。
+        """
+        candidates = cls.relay_candidates(primary, extra)
+        wanted = str(choice or "").strip().lower()
+        if wanted:
+            for item in candidates:
+                if wanted in (item["name"].lower(), item["region"].lower()):
+                    return item["url"]
+        return candidates[0]["url"] if candidates else ""
 
     @classmethod
     def drive_proxy_template(

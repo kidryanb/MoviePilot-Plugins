@@ -151,5 +151,45 @@ class QuarkRelayTest(unittest.TestCase):
         self.assertEqual(sum(1 for c in FakeMP.calls if c.get('file_id') == 'fid-cache'), 1)
 
 
+class RelayListTest(unittest.TestCase):
+    """多地区中转的设计口子：STRM 里的中转地址可从列表里手动选。"""
+
+    G = strm.StrmGenerator
+
+    def test_old_config_unchanged(self):
+        # 升级后没有新字段：仍用原来的「服务器中转地址」
+        self.assertEqual(self.G.pick_relay_url('https://mp.example.com/q/'), 'https://mp.example.com/q')
+        self.assertEqual(self.G.pick_relay_url('https://mp.example.com/q', '', ''), 'https://mp.example.com/q')
+        self.assertEqual(self.G.pick_relay_url('', '', ''), '')
+
+    def test_list_parsing(self):
+        items = self.G.relay_candidates('https://cn.example.com/q', (
+            '# 注释\n'
+            'eu|europe|https://eu.example.com/q/\n'
+            'us|https://us.example.com/q\n'
+            'https://plain.example.com/q\n'
+            'bad|ftp://x\n'
+            'dup|cn|https://cn.example.com/q\n'))
+        self.assertEqual([(i['name'], i['region'], i['url']) for i in items], [
+            ('default', '', 'https://cn.example.com/q'),
+            ('eu', 'europe', 'https://eu.example.com/q'),
+            ('us', '', 'https://us.example.com/q'),
+            ('relay4', '', 'https://plain.example.com/q'),
+        ])
+
+    def test_manual_choice_by_name_or_region(self):
+        extra = 'eu|Europe|https://eu.example.com/q'
+        self.assertEqual(self.G.pick_relay_url('https://cn.example.com/q', extra, 'eu'), 'https://eu.example.com/q')
+        self.assertEqual(self.G.pick_relay_url('https://cn.example.com/q', extra, 'europe'),
+                         'https://eu.example.com/q')
+        self.assertEqual(self.G.pick_relay_url('https://cn.example.com/q', extra, 'missing'),
+                         'https://cn.example.com/q')
+        self.assertEqual(self.G.pick_relay_url('https://cn.example.com/q', extra, 'default'),
+                         'https://cn.example.com/q')
+
+    def test_list_only(self):
+        self.assertEqual(self.G.pick_relay_url('', 'eu|https://eu.example.com/q'), 'https://eu.example.com/q')
+
+
 if __name__ == '__main__':
     unittest.main()

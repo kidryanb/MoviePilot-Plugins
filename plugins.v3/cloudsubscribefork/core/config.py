@@ -139,6 +139,10 @@ class UIConfig:
             # 服务器中转：夸克 STRM 指向独立的 quark-relay 服务，播放流量走服务器
             "strm_relay_url": "",
             "strm_relay_secret": "",
+            # 多地区中转预留（PR C）：每行「名称|地区|URL」，strm_relay_choice 填名称或地区手动选择；
+            # 都留空时只用 strm_relay_url，与旧版完全一样。所有中转共用 strm_relay_secret。
+            "strm_relay_urls": "",
+            "strm_relay_choice": "",
             "media_server_refresh_enabled": False,
             "media_servers": [],
             "media_server_path_mappings": "",
