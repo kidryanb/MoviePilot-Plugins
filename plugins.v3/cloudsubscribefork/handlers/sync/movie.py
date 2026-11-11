@@ -444,10 +444,9 @@ class MovieSyncProcessor(OwnerDelegator):
                                 continue
                             provider_name = provider_name or resource_title
                             title_seasons = self._magnet_title_seasons(resource)
-                            if title_seasons:
-                                logger.debug(
-                                    f"电影离线资源包含剧集季数，已跳过：{provider_name}"
-                                )
+                            if self._movie_title_seasons_conflict(title_seasons, mediainfo):
+                                kind = "是特别篇/SP/OVA 包" if title_seasons == {0} else "包含剧集季数"
+                                logger.debug(f"电影离线资源{kind}，已跳过：{provider_name}")
                                 continue
                             matched, current_score = self._search_handler.select_file_candidate(
                                 [{"name": provider_name, "size": resource.get("size") or 0}],

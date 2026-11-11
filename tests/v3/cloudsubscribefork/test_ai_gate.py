@@ -334,7 +334,7 @@ class ReviewStoreTest(unittest.TestCase):
 def _sync_methods():
     """从 service.py 取出 _apply_ai_gate / _notify_ai_reviews，配上测试替身执行。"""
     import ast
-    from typing import Any, Dict, List, Set, Tuple
+    from typing import Any, Dict, List, Optional, Set, Tuple
 
     source = (PLUGIN_DIR / 'handlers/sync/service.py').read_text(encoding='utf-8')
     tree = ast.parse(source)
@@ -344,7 +344,7 @@ def _sync_methods():
         for node in cls.body if isinstance(node, ast.FunctionDef) and node.name in wanted
     ]
     namespace = {
-        'Any': Any, 'Dict': Dict, 'List': List, 'Set': Set, 'Tuple': Tuple,
+        'Any': Any, 'Dict': Dict, 'List': List, 'Optional': Optional, 'Set': Set, 'Tuple': Tuple,
         'MediaInfo': object, 'SeasonGuard': SeasonGuard, 'REJECT': REJECT,
         'TRANSFER': TRANSFER, 'entry_key': gate_module.entry_key, 'logger': _logger,
     }

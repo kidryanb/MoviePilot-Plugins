@@ -346,19 +346,35 @@ class OfflineDownloadService(OwnerDelegator):
         if not prepared:
             return [], invalid_hashes
 
-        existing_hashes = {
-            self._normalize_hash(task.get("id"))
+        existing_tasks = {
+            self._normalize_hash(task.get("id")): task
             for task in self.get_offline_tasks()
             if task.get("id")
         }
+        # 已完成的同 hash 任务按去重复用；未完成（排队 / 下载中 / 失败）的不再提交，也不算提交成功，
+        # 否则上层会再建一条 pending，等到目录里出现别的文件时被误判成完成
         success_hashes = [
-            item["hash"] for item in prepared if item["hash"] in existing_hashes
+            item["hash"] for item in prepared
+            if item["hash"] in existing_tasks and existing_tasks[item["hash"]].get("completed")
+        ]
+        unfinished_hashes = [
+            item["hash"] for item in prepared
+            if item["hash"] in existing_tasks and not existing_tasks[item["hash"]].get("completed")
         ]
         pending_items = [
-            item for item in prepared if item["hash"] not in existing_hashes
+            item for item in prepared if item["hash"] not in existing_tasks
         ]
         if success_hashes:
-            logger.debug(f"115 离线任务已存在，批量跳过 {len(success_hashes)} 个")
+            logger.debug(f"115 离线任务已完成，复用 {len(success_hashes)} 个")
+        if unfinished_hashes:
+            logger.info(
+                f"115 已有同一 hash 的未完成离线任务，跳过重复提交 {len(unfinished_hashes)} 个："
+                + "，".join(
+                    f"{value}（{existing_tasks[value].get('status_text') or '未完成'}）"
+                    for value in unfinished_hashes
+                )
+            )
+        invalid_hashes = invalid_hashes + unfinished_hashes
         if not pending_items:
             return success_hashes, invalid_hashes
 

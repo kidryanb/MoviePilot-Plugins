@@ -17,6 +17,6 @@ jobs:
           python-version: '${{ matrix.python }}'
       - run: python -m pip install 'pydantic>=2.10,<3'
       - run: python tests/v3/downloadcloudupload/test_plugin.py
-      - run: python -m unittest tests/v3/cloudsubscribefork/test_coexist.py tests/v3/cloudsubscribefork/test_drive_routing.py tests/v3/cloudsubscribefork/test_quark_relay.py tests/v3/cloudsubscribefork/test_quark_relay_cache.py tests/v3/cloudsubscribefork/test_episode_rules.py tests/v3/cloudsubscribefork/test_cloudflare_seedhub.py tests/v3/cloudsubscribefork/test_search_fixes.py tests/v3/cloudsubscribefork/test_link_and_strm.py tests/v3/cloudsubscribefork/test_quark_features.py tests/v3/cloudsubscribefork/test_season_guard.py tests/v3/cloudsubscribefork/test_ai_gate.py
+      - run: python -m unittest tests/v3/cloudsubscribefork/test_offline_pipeline.py tests/v3/cloudsubscribefork/test_mediainfo_prefill.py tests/v3/cloudsubscribefork/test_share_first.py tests/v3/cloudsubscribefork/test_coexist.py tests/v3/cloudsubscribefork/test_drive_routing.py tests/v3/cloudsubscribefork/test_quark_relay.py tests/v3/cloudsubscribefork/test_quark_relay_cache.py tests/v3/cloudsubscribefork/test_episode_rules.py tests/v3/cloudsubscribefork/test_cloudflare_seedhub.py tests/v3/cloudsubscribefork/test_search_fixes.py tests/v3/cloudsubscribefork/test_link_and_strm.py tests/v3/cloudsubscribefork/test_quark_features.py tests/v3/cloudsubscribefork/test_season_guard.py tests/v3/cloudsubscribefork/test_ai_gate.py
       - run: python -m compileall -q plugins.v3 tools
       - run: git diff --check

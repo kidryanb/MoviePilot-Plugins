@@ -182,7 +182,7 @@ class PanSouSearchService:
         groups: Dict[str, List[Dict[str, Any]]] = {}
         allowed = set(allowed_types)
         # 超出上限倍数后提前退出，避免大结果集浪费 CPU
-        hard_cap = max(limit * 5, 50)
+        hard_cap = max(limit * 10, 100)
         total_matched = 0
         for item in rows if isinstance(rows, list) else []:
             if not isinstance(item, dict):
@@ -251,6 +251,91 @@ class PanSouSearchService:
         for group in groups.values():
             group.sort(key=lambda row: row.get("update_time", ""), reverse=True)
         return groups
+
+    _CN_NUMBERS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                   "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    _NUM = r"[0-9零一二两三四五六七八九十]{1,4}"
+    _SEASON_MARKER_RE = re.compile(
+        r"(?<![A-Za-z0-9])[Ss]0*(\d{1,2})(?![0-9])|[Ss]eason[\s._-]*0*(\d{1,2})(?!\d)"
+        r"|第\s*(" + _NUM + r")\s*季"
+    )
+    _SEASON_RANGE_RE = re.compile(
+        r"(?<![A-Za-z0-9])[Ss]0*(\d{1,2})\s*[-~～至到]\s*[Ss]?0*(\d{1,2})(?![0-9Ee])"
+        r"|(?:第\s*)?(" + _NUM + r")\s*[-~～至到]\s*(?:第\s*)?(" + _NUM + r")\s*季"
+    )
+    _SEASON_TOTAL_RE = re.compile(r"(?:全|前|共)\s*(" + _NUM + r")\s*季")
+
+    @classmethod
+    def _cn_number(cls, text: str) -> int:
+        text = str(text or "").strip()
+        if text.isdigit():
+            return int(text)
+        if "十" in text:
+            head, _, tail = text.partition("十")
+            return cls._CN_NUMBERS.get(head, 1 if not head else 0) * 10 + cls._CN_NUMBERS.get(tail, 0)
+        return cls._CN_NUMBERS.get(text, 0)
+
+    @classmethod
+    def _season_relevance(cls, resource: Dict[str, Any], season: int) -> int:
+        """候选与目标季的相关度：3=明确目标季，2=合集覆盖目标季，1=没有季信息，0=明确是别的季。"""
+        text = " ".join(
+            str(resource.get(key) or "") for key in ("title", "description")
+        )
+        covered = False
+        for match in cls._SEASON_RANGE_RE.finditer(text):
+            start = cls._cn_number(match.group(1) or match.group(3))
+            end = cls._cn_number(match.group(2) or match.group(4))
+            if 0 < start <= season <= end:
+                covered = True
+        for match in cls._SEASON_TOTAL_RE.finditer(text):
+            if season <= cls._cn_number(match.group(1)):
+                covered = True
+        stripped = cls._SEASON_TOTAL_RE.sub(" ", cls._SEASON_RANGE_RE.sub(" ", text))
+        seasons = set()
+        for match in cls._SEASON_MARKER_RE.finditer(stripped):
+            value = match.group(1) or match.group(2) or match.group(3)
+            number = cls._cn_number(value)
+            if number > 0:
+                seasons.add(number)
+        if season in seasons:
+            return 3
+        if covered:
+            return 2
+        return 0 if seasons else 1
+
+    @classmethod
+    def _rank_by_season(
+            cls, groups: List[List[Dict[str, Any]]], season: int
+    ) -> None:
+        """组内先按目标季相关度、再按更新时间排序：含目标季的合集不会被短剧和其他季挤出限额。"""
+        for group in groups:
+            group.sort(
+                key=lambda row: (
+                    cls._season_relevance(row, season),
+                    str(row.get("update_time") or ""),
+                ),
+                reverse=True,
+            )
+
+    @classmethod
+    def _select_candidates(
+            cls,
+            grouped: List[List[Dict[str, Any]]],
+            limit: int,
+            season: Any = None,
+    ) -> List[Dict[str, Any]]:
+        """按类型轮询截取候选；剧集自动订阅先按目标季排序，覆盖目标季的分享不受限额挤占。"""
+        if season is None:
+            return cls._round_robin(list(grouped), limit)
+        season = int(season)
+        cls._rank_by_season(grouped, season)
+        candidates = cls._round_robin(list(grouped), limit)
+        picked = {id(row) for row in candidates}
+        extra = [
+            row for group in grouped for row in group
+            if id(row) not in picked and cls._season_relevance(row, season) >= 2
+        ]
+        return candidates + extra[:limit]
 
     @staticmethod
     def _round_robin(
@@ -369,7 +454,9 @@ class PanSouSearchService:
                 or normalize_resource_type(group[0].get("resource_type", "")) in resource_type_set
             )
         ]
-        candidates = self._round_robin(grouped, limit)
+        candidates = self._select_candidates(
+            grouped, limit, None if query.resource_list_mode else season
+        )
         candidates = normalize_magnets(candidates, "pansou")
         usable = [
             resource for resource in candidates

@@ -4,7 +4,7 @@
 
 | 插件 | 插件 ID | 版本 | 用途 |
 | --- | --- | --- | --- |
-| 网盘订阅助手（改版） | `CloudSubscribeFork` | `0.5.13` | 订阅搜网盘分享，同盘转存到 115 或夸克，可生成夸克 STRM |
+| 网盘订阅助手（改版） | `CloudSubscribeFork` | `0.5.14` | 订阅搜网盘分享，同盘转存到 115 或夸克，可生成夸克 STRM |
 | 下载完成自动上传 | `DownloadCloudUpload` | `0.4.0` | 下载器任务完成后按文件夹规则上传 115，保留本地文件 |
 
 版本号以 [`package.v3.json`](package.v3.json) 为准，里面也有每个版本的更新说明。
@@ -18,7 +18,7 @@
 
 ## 网盘订阅助手（改版）
 
-版本：`0.5.13`。插件 ID `CloudSubscribeFork`，fork 自 [odomu/MoviePilot-Plugins](https://github.com/odomu/MoviePilot-Plugins) 的网盘订阅助手 v1.7.7，与原版 `CloudSubscribe` 可同时安装、互不覆盖。原版的使用说明见 [docs/cloudsubscribe.md](docs/cloudsubscribe.md)，改造计划见 [docs/cloudsubscribe-fork-plan.md](docs/cloudsubscribe-fork-plan.md)，源码说明见 [plugins.v3/cloudsubscribefork/README.md](plugins.v3/cloudsubscribefork/README.md)。
+版本：`0.5.14`。插件 ID `CloudSubscribeFork`，fork 自 [odomu/MoviePilot-Plugins](https://github.com/odomu/MoviePilot-Plugins) 的网盘订阅助手 v1.7.7，与原版 `CloudSubscribe` 可同时安装、互不覆盖。原版的使用说明见 [docs/cloudsubscribe.md](docs/cloudsubscribe.md)，改造计划见 [docs/cloudsubscribe-fork-plan.md](docs/cloudsubscribe-fork-plan.md)，源码说明见 [plugins.v3/cloudsubscribefork/README.md](plugins.v3/cloudsubscribefork/README.md)。
 
 ### 相对原版的主要改动
 
@@ -31,6 +31,7 @@
 - **新入库 STRM 预读媒体信息（0.5.11，默认关）**：MP 把 STRM 整理进媒体库后，逐条让 Emby 提前分析媒体流，第一次播放不用现场分析；只处理单个条目、不刷新媒体库，限速并失败重试，可限定只处理某些来源目录。
 - **quark-relay 1.1.0 内网取链和缓存（0.5.12）**：中转可另配 `MP_INTERNAL_URL` 走内网取直链（连不上自动退回 `MP_URL`），直链按过期时间缓存，夸克返回 403/410 时自动续签一次，播放途中过期也能续上；`LOG_LEVEL=DEBUG` 时逐请求记录取链、首包耗时和缓存命中（脱敏）。插件新增 `strm_relay_urls` / `strm_relay_choice` 为多地区中转预留，默认空，不影响旧配置。
 - **离线任务修复（0.5.13）**：电视剧的磁力/ed2k 按排队时所在的网盘提交和监控（默认盘是夸克时交给 115）；115 离线任务按 info_hash 记录，下载失败立即识别并清理，不用等满超时；手动重试会清掉对应黑名单。
+- **离线卡死与特别篇误绑（0.5.14）**：暂存目录有别的文件不再让磁力算作下载完成，卡在 0% 的任务到超时会删除；离线黑名单持久化（1 天）；115 已有同一 hash 未完成时不再重复提交；特别篇/SP/OVA 不再绑到普通季；能配上缺集的 115/夸克分享（含多季合集）先转存，磁力只做后手。
 - **订阅缺集以 MP 为准**：按媒体服务器和订阅已下载记录计算，综艺「第N期上/下」按第 2N−1 / 2N 集识别。
 - **搜索稳定性**：超时渠道立即让出并发名额；搜索代理可只给指定渠道使用，局域网地址直连；Cloudflare 质询判断更准，SeedHub 可用 FlareSolverr。
 
