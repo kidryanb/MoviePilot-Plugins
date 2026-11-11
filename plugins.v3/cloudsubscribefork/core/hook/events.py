@@ -176,7 +176,12 @@ class PluginEventHandler(OwnerDelegator):
         return
 
     def on_transfer_complete(self, event: Event):
-        """PT 整理完成后异步进入网盘洗版上传。"""
+        """整理完成：新入库 STRM 预读媒体信息；PT 整理完成后异步进入网盘洗版上传。"""
+        if event and self._enabled and self._mediainfo_prefiller:
+            try:
+                self._mediainfo_prefiller.enqueue_transfer(event.event_data)
+            except Exception as error:
+                logger.warning(f"媒体信息预读入队失败：{type(error).__name__}")
         if (
                 not event
                 or not self._enabled
