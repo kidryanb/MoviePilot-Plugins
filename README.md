@@ -4,7 +4,7 @@
 
 | 插件 | 插件 ID | 版本 | 用途 |
 | --- | --- | --- | --- |
-| 网盘订阅助手（改版） | `CloudSubscribeFork` | `0.5.10` | 订阅搜网盘分享，同盘转存到 115 或夸克，可生成夸克 STRM |
+| 网盘订阅助手（改版） | `CloudSubscribeFork` | `0.5.11` | 订阅搜网盘分享，同盘转存到 115 或夸克，可生成夸克 STRM |
 | 下载完成自动上传 | `DownloadCloudUpload` | `0.4.0` | 下载器任务完成后按文件夹规则上传 115，保留本地文件 |
 
 版本号以 [`package.v3.json`](package.v3.json) 为准，里面也有每个版本的更新说明。
@@ -18,7 +18,7 @@
 
 ## 网盘订阅助手（改版）
 
-版本：`0.5.10`。插件 ID `CloudSubscribeFork`，fork 自 [odomu/MoviePilot-Plugins](https://github.com/odomu/MoviePilot-Plugins) 的网盘订阅助手 v1.7.7，与原版 `CloudSubscribe` 可同时安装、互不覆盖。原版的使用说明见 [docs/cloudsubscribe.md](docs/cloudsubscribe.md)，改造计划见 [docs/cloudsubscribe-fork-plan.md](docs/cloudsubscribe-fork-plan.md)，源码说明见 [plugins.v3/cloudsubscribefork/README.md](plugins.v3/cloudsubscribefork/README.md)。
+版本：`0.5.11`。插件 ID `CloudSubscribeFork`，fork 自 [odomu/MoviePilot-Plugins](https://github.com/odomu/MoviePilot-Plugins) 的网盘订阅助手 v1.7.7，与原版 `CloudSubscribe` 可同时安装、互不覆盖。原版的使用说明见 [docs/cloudsubscribe.md](docs/cloudsubscribe.md)，改造计划见 [docs/cloudsubscribe-fork-plan.md](docs/cloudsubscribe-fork-plan.md)，源码说明见 [plugins.v3/cloudsubscribefork/README.md](plugins.v3/cloudsubscribefork/README.md)。
 
 ### 相对原版的主要改动
 
@@ -28,6 +28,7 @@
 - **夸克 STRM**：可生成夸克 STRM，支持经 [quark-relay](tools/quark-relay/README.md) 服务器中转播放。内容没变不重写，变了原地覆盖，硬链接到媒体库的那份同步更新（0.5.5）。
 - **夸克改名与缓存（0.5.6）**：按 md5 或文件 ID 定位改名；目录、路径和分享缓存可在总览里统计和清理，覆盖所有已登录的网盘。
 - **不再拿旧季或未播出的集占位（0.5.7）**：按 TMDB 播出日不搜、不转未播出的集（可设提前天数，可关闭）；季号识别支持第四季、S2、Season 2 和年份；文件名日期不属于本季或与播出日相差太多时拒绝；只有「第N期」没有上/下时不再猜集号；网盘和本地中转目录里已有的集不再重复搜索。
+- **新入库 STRM 预读媒体信息（0.5.11，默认关）**：MP 把 STRM 整理进媒体库后，逐条让 Emby 提前分析媒体流，第一次播放不用现场分析；只处理单个条目、不刷新媒体库，限速并失败重试，可限定只处理某些来源目录。
 - **订阅缺集以 MP 为准**：按媒体服务器和订阅已下载记录计算，综艺「第N期上/下」按第 2N−1 / 2N 集识别。
 - **搜索稳定性**：超时渠道立即让出并发名额；搜索代理可只给指定渠道使用，局域网地址直连；Cloudflare 质询判断更准，SeedHub 可用 FlareSolverr。
 
