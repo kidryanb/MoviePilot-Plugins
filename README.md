@@ -1,10 +1,59 @@
-# MoviePilot 下载完成自动上传
+# kidryanb 的 MoviePilot V3 插件
+
+在 MP 插件市场中添加本仓库地址 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins) 即可安装下面两个插件。两者可以装在同一个 MoviePilot 里，分工互不重叠。
+
+| 插件 | 插件 ID | 版本 | 用途 |
+| --- | --- | --- | --- |
+| 网盘订阅助手（改版） | `CloudSubscribeFork` | `0.5.10` | 订阅搜网盘分享，同盘转存到 115 或夸克，可生成夸克 STRM |
+| 下载完成自动上传 | `DownloadCloudUpload` | `0.4.0` | 下载器任务完成后按文件夹规则上传 115，保留本地文件 |
+
+版本号以 [`package.v3.json`](package.v3.json) 为准，里面也有每个版本的更新说明。
+
+另有两个配套工具，放在 [`tools/`](tools)：
+
+| 工具 | 用途 |
+| --- | --- |
+| [quark-relay](tools/quark-relay/README.md) | 夸克 STRM 服务器中转：播放流量走服务器，不占 NAS 上行（插件 0.5.0 起支持） |
+| [strm-relink](tools/strm-relink/README.md) | 修复 0.5.5 之前因 STRM 重写而断开的媒体库硬链接，一次性脚本 |
+
+## 网盘订阅助手（改版）
+
+版本：`0.5.10`。插件 ID `CloudSubscribeFork`，fork 自 [odomu/MoviePilot-Plugins](https://github.com/odomu/MoviePilot-Plugins) 的网盘订阅助手 v1.7.7，与原版 `CloudSubscribe` 可同时安装、互不覆盖。原版的使用说明见 [docs/cloudsubscribe.md](docs/cloudsubscribe.md)，改造计划见 [docs/cloudsubscribe-fork-plan.md](docs/cloudsubscribe-fork-plan.md)，源码说明见 [plugins.v3/cloudsubscribefork/README.md](plugins.v3/cloudsubscribefork/README.md)。
+
+### 相对原版的主要改动
+
+- **适配 MP V3**：入口与常用导入改为 `app.sdk`，依赖改用 `pyproject.toml`，附带构建好的配置页。
+- **与「下载完成自动上传」共存**：PT 洗版上传固定关闭；新装默认只接管勾选的订阅、不拦截平台下载；115 Cookie 默认只读复用 P115StrmHelper；115 转存目录与上传目录重叠时停用 115。
+- **同盘优先**：115 分享转存到 115，夸克分享转存到夸克，未登录的盘不会被写入。
+- **夸克 STRM**：可生成夸克 STRM，支持经 [quark-relay](tools/quark-relay/README.md) 服务器中转播放。内容没变不重写，变了原地覆盖，硬链接到媒体库的那份同步更新（0.5.5）。
+- **夸克改名与缓存（0.5.6）**：按 md5 或文件 ID 定位改名；目录、路径和分享缓存可在总览里统计和清理，覆盖所有已登录的网盘。
+- **不再拿旧季或未播出的集占位（0.5.7）**：按 TMDB 播出日不搜、不转未播出的集（可设提前天数，可关闭）；季号识别支持第四季、S2、Season 2 和年份；文件名日期不属于本季或与播出日相差太多时拒绝；只有「第N期」没有上/下时不再猜集号；网盘和本地中转目录里已有的集不再重复搜索。
+- **订阅缺集以 MP 为准**：按媒体服务器和订阅已下载记录计算，综艺「第N期上/下」按第 2N−1 / 2N 集识别。
+- **搜索稳定性**：超时渠道立即让出并发名额；搜索代理可只给指定渠道使用，局域网地址直连；Cloudflare 质询判断更准，SeedHub 可用 FlareSolverr。
+
+### AI 季集裁决（0.5.8 起）
+
+MoviePilot 开启了 AI 智能体且 LLM 运行时就绪时，规则判不准的文件（没有本季季号或日期、靠「第N期上/下」换算、多季合集、加更花絮等）在转存前交给 AI 判断。AI 也没把握的进入待复核，不转存，并发送通知；在 MP 的 AI 助手里说「查看网盘订阅待复核」即可放行或拒绝。读取待复核列表不会写回数据。
+
+MP 没开 AI 或运行时未就绪时，只走规则，行为与 0.5.7 相同。
+
+自检接口 `GET /api/v1/plugin/CloudSubscribeFork/ai/selftest`（API Key 鉴权）在 MP 进程内跑一遍裁决，不转存。它用一个没有期号、日期和季号的样例文件名做注入测试，被放行即判失败，结果中返回 `passed` 和 `injection_blocked`。两次自检至少间隔 60 秒，并计入每日 AI 额度。
+
+### 测试
+
+```sh
+python -m unittest discover -s tests/v3/cloudsubscribefork
+```
+
+许可为 GPL-3.0-only，全文见 [plugins.v3/cloudsubscribefork/LICENSE](plugins.v3/cloudsubscribefork/LICENSE)。
+
+## 下载完成自动上传
 
 版本：`0.4.0`，测试版。
 
 监控 MoviePilot 中已经配置的 qBittorrent 和 Transmission。任务完成后，按用户设置的文件夹规则直接上传到 115，保留本地文件和做种任务。
 
-## 当前状态
+### 当前状态
 
 已实现双下载器监控、文件夹规则编辑、补传预览、持久队列、失败重试、上传进度、远端核对、STRM 目录接管、上传速度限制，以及任务页/仪表盘上传历史。仓库提供 `icons/cloud.png`，与 `plugin_icon` / `package.v3.json` 的 `cloud.png` 引用一致。
 
@@ -14,7 +63,7 @@
 
 请先用一个小视频联调，再启用日常任务。上传始终保留本地文件，没有自动覆盖或自动删除功能。
 
-## 运行要求
+### 运行要求
 
 - MoviePilot V3，提供 `app.sdk.services` 和一次性任务调度。
 - 在 MP 中配置并启用 qBittorrent、Transmission 中需要监控的实例。
@@ -24,7 +73,7 @@
 
 本版本直接调用 115 客户端，不需要额外安装网盘储存插件。当前只支持 115。
 
-## 安装
+### 安装
 
 在 MP 插件市场中添加 [kidryanb/MoviePilot-Plugins](https://github.com/kidryanb/MoviePilot-Plugins)，然后安装“下载完成自动上传”。[v0.2.1 预发布包](https://github.com/kidryanb/MoviePilot-Plugins/releases/tag/v0.2.1)也可以用于本地仓库联调：
 
@@ -35,7 +84,7 @@
 
 本插件没有额外的 Python 依赖清单，使用 Python 标准库与 MP 已有依赖。不要在 Windows 上直接运行插件入口文件；它需要 MP 宿主。
 
-## 复用 STRM 助手授权
+### 复用 STRM 助手授权
 
 在 115 STRM 助手中完成登录并保存设置，然后重新打开本插件设置。授权提示会显示是否读取到完整 Cookie；它只检查配置完整性，不代表网盘已验证登录成功。
 
@@ -45,7 +94,7 @@ DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem
 
 升级到 `0.2.0` 后关闭旧设置窗口再重新打开。原有 115 文件夹规则和上传队列保留；旧版本中配置的其他网盘任务会停止处理并显示 `ONLY_115_SUPPORTED`。旧储存后端生成的回执不能自动证明新版账号身份，同名文件无法确认时会报告冲突，不重新覆盖。
 
-## 配置文件夹
+### 配置文件夹
 
 在设置页填写规则，点击“加入或更新规则”，最后保存插件设置。可新增、选择、修改或删除多组规则。
 
@@ -67,7 +116,7 @@ DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem
 
 两个本地路径相同时，填写相同路径即可。支持 Windows 下载器路径映射到 Linux MP 容器目录。规则按完整路径组件匹配，多条规则命中时使用来源文件夹最深的一条。同一来源存在冲突规则时不能启用。
 
-## 首次启用和补传
+### 首次启用和补传
 
 首次成功读取每个下载器时，将已经完成的任务记为基线，不自动上传旧任务。首次读取时尚未完成的任务，之后完成会自动上传。停用后重新启用或普通重启不会重置基线。
 
@@ -79,7 +128,7 @@ DDSRem 插件仓库为 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem
 
 预览范围可选全部任务、最近 7 天或最近 30 天。完成时间未知的任务单独标明，仍需用户逐项选择。预览本身不上传，不修改完成基线。MP 的下载历史不用于判断任务是否完成。
 
-## 日常上传
+### 日常上传
 
 默认每 60 秒检查一次，文件稳定等待默认 10 秒。两个下载器分别查询，连接失败不会阻止另一个下载器工作。上传使用单工作线程串行执行，后端上传期间仍可继续检查下载器。
 
@@ -91,11 +140,11 @@ QB 使用剩余字节、完成进度和原始任务状态判断。Transmission �
 
 上传记录保存于插件数据目录的 `queue.sqlite`，不写入 MP 的业务数据表。成功记录长期保留用于去重，不要随意删除数据库。历史上传表单独保留最近约 200 条终态结果（成功/已存在/失败/冲突/忽略），供页面浏览，并会裁剪过旧的事件日志。
 
-## 上传历史
+### 上传历史
 
 任务页底部显示「近期上传记录」，仪表盘可添加「上传历史」组件。每条记录包含时间、标题、源文件名、115 目标路径、状态、大小和错误摘要。历史接口 `/history` 支持分页；展示内容已脱敏，不包含 Cookie、本机绝对路径或凭据。
 
-## 核对与冲突
+### 核对与冲突
 
 插件保存本地 SHA-256 和上传回执。网盘有同名文件时，不能仅凭同名或同大小认为内容一致。当前去重只使用本地内容哈希与本插件可信回执，因此原本就在网盘中、又没有本插件可信回执的同名文件会显示冲突。
 
@@ -103,7 +152,7 @@ QB 使用剩余字节、完成进度和原始任务状态判断。Transmission �
 
 上传接口返回后仍会查询远端，核对文件标识和大小。该核对证明本插件上传回执对应的文件存在，不等于逐字节重新下载验证。115 回执包含账号身份，避免不同账号的文件标识碰巧相同而误判。重复同名目录或文件会阻止继续操作。
 
-## 失败处理
+### 失败处理
 
 上传前发生查询或目录创建错误时，默认最多自动重试 5 次，间隔为 1、5、15、30、60 分钟。原始服务异常统一转换为固定错误码，不将凭据写入本插件任务记录或日志。
 
@@ -116,7 +165,7 @@ QB 使用剩余字节、完成进度和原始任务状态判断。Transmission �
 
 长时间没有结果的上传需要实机判断。当前版本没有后端专用账号熔断、限流识别或独立上传取消功能；这些错误按通用服务错误处理，源文件不会删除。
 
-## 测试
+### 测试
 
 离线测试仅需要 Python 和 Pydantic，使用标准库 `unittest`。从仓库根目录运行：
 
@@ -143,8 +192,8 @@ API 使用 MP 的 Bearer 认证，并要求超级管理员。接口位于 `/api/
 
 真实验收至少包括：宿主加载、启用与停用、页面渲染、QB 小视频上传、Transmission 小视频上传、做种文件保留、网盘文件可读、重启后不重复上传、速度限制生效、历史记录展示。当前离线结果不能替代这些检查。
 
-## 参考与许可
+### 参考与许可
 
 实现参考 [MP V3 插件开发指南](https://github.com/jxxghp/MoviePilot-Plugins/blob/main/docs/Plugin_Development.md)、[STRM 助手配置结构](https://github.com/DDSRem-Dev/MoviePilot-Plugins/blob/main/plugins.v2/p115strmhelper/core/config.py)、[p115client 公开接口](https://github.com/ChenyangGao/p115client/blob/main/p115client/client.py) 和 [Transmission RPC 文件结构](https://github.com/Trim21/transmission-rpc/blob/master/transmission_rpc/torrent.py)。
 
-本仓库新增插件代码按 MIT 许可证提供。第三方 MP、STRM 助手和客户端遵循各自许可证。插件只调用其公开接口，不包含参考仓库的上传实现源码。
+「下载完成自动上传」的代码按仓库根目录的 MIT 许可证提供。第三方 MP、STRM 助手和客户端遵循各自许可证。插件只调用其公开接口，不包含参考仓库的上传实现源码。
