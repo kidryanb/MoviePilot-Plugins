@@ -80,10 +80,12 @@ class ReviewStore:
         record = self._load().get(str(review_id or "").strip())
         return dict(record) if record else None
 
-    def list(self, status: str = "pending", limit: int = 20) -> List[Dict[str, Any]]:
+    def list(self, status: str = "pending", limit: int = 20,
+             persist: bool = True) -> List[Dict[str, Any]]:
+        """persist=False 时只读：过期判断只作用于返回结果，不写回数据。"""
         with self._lock:
             data = self._load()
-            if self._housekeep(data):
+            if self._housekeep(data) and persist:
                 self._store(data)
         records = [
             dict(record) for record in data.values()
