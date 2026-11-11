@@ -134,7 +134,7 @@ class StrmProxyApi(OwnerDelegator):
         """
         config = getattr(self, "_applied_config", None) or {}
         secret = str(config.get("strm_relay_secret") or "")
-        if not secret or not StrmGenerator.relay_base_url(config.get("strm_relay_url")):
+        if not secret or not StrmGenerator.relay_candidates(config.get("strm_relay_url"), config.get("strm_relay_urls")):
             return {"success": False, "message": "未配置服务器中转"}
         drive_key = str(drive or "").strip().lower()
         identifier = str(file_id or "").strip()

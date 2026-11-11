@@ -481,7 +481,10 @@ class SyncHandler(DriveScopeMixin):
                             f"{getattr(self._cloud_drive, 'name', '默认网盘')} 不支持配置的 STRM 模板，"
                             f"改用播放代理短链：{s_template}"
                         )
-                    relay_url = StrmGenerator.relay_base_url(_get_val("strm_relay_url", ""))
+                    relay_url = StrmGenerator.pick_relay_url(
+                        _get_val("strm_relay_url", ""), _get_val("strm_relay_urls", ""),
+                        _get_val("strm_relay_choice", ""),
+                    )
                     relay_template = StrmGenerator.relay_template(
                         getattr(self._cloud_drive, "key", ""),
                         StrmGenerator.proxy_identifier_variable(reference),
@@ -578,7 +581,10 @@ class SyncHandler(DriveScopeMixin):
             "route": _get_val("strm_proxy_route", ""),
             "base_url": _get_val("strm_base_url", StrmGenerator.DEFAULT_BASE_URL),
             "port": _get_val("strm_proxy_port", 0),
-            "relay_url": StrmGenerator.relay_base_url(_get_val("strm_relay_url", "")),
+            "relay_url": StrmGenerator.pick_relay_url(
+                _get_val("strm_relay_url", ""), _get_val("strm_relay_urls", ""),
+                _get_val("strm_relay_choice", ""),
+            ),
             "relay_secret": str(_get_val("strm_relay_secret", "") or ""),
         }
         # M1 同盘优先：为默认盘之外的已登录网盘准备一套转存属性，按分享类型切换。
