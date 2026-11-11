@@ -349,6 +349,12 @@ class UpgradeService(OwnerDelegator):
                             continue
                         provider_name = provider_name or resource_title
                         title_seasons = self._magnet_title_seasons(resource)
+                        if title_seasons == {0} and season:
+                            logger.debug(
+                                f"{upgrade_log_prefix} 离线资源是特别篇/SP/OVA 包，"
+                                f"不用于普通季 S{season:02d} 洗版：{provider_name}"
+                            )
+                            continue
                         if title_seasons and season not in title_seasons:
                             logger.debug(
                                 f"{upgrade_log_prefix} Magnet 标题预过滤排除："

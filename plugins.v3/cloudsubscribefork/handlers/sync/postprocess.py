@@ -1,6 +1,7 @@
 """离线任务完成检测与文件后处理。"""
 
 import copy
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -344,14 +345,23 @@ class PostprocessService(OwnerDelegator):
         task_id = self._offline_native_task_id(item)
         if not task_id:
             return
+        # 只有经确认真正完成（网盘任务 completed / 已移动 / 目录里有本任务文件）才保留任务；
+        # 0.5.13 及以前「目录非空」误写的 download_completed_at 没有 download_verified，照常清理。
+        truly_completed = bool(
+            item.get("moved_at")
+            or (item.get("download_completed_at") and item.get("download_verified"))
+        )
+        if truly_completed:
+            logger.warning(f"离线任务已完成，保留任务与已下载文件：{task_id}，原因：{reason}")
+            return
         delete_task = getattr(getattr(self, "_offline_tasks", None), "delete_offline_task", None)
-        if callable(delete_task) and not bool(item.get("download_completed_at")):
+        if callable(delete_task):
             try:
                 delete_task(task_id, delete_source_file=False)
-                logger.info(f"已清理未完成的离线任务：{task_id}")
+                logger.info(f"已清理未完成的离线任务：{task_id}，原因：{reason}")
             except Exception as error:
                 logger.warning(f"清理未完成的离线任务失败：{task_id}，{error}")
-        logger.warning(f"离线任务未完成，保留已下载文件：{task_id}，原因：{reason}")
+        logger.warning(f"离线任务未完成，保留已落地文件：{task_id}，原因：{reason}")
 
     def _lookup_offline_task(
             self, ctx: "PostprocessBatchContext", item: Dict[str, Any], pending_key: str
@@ -1525,34 +1535,24 @@ class PostprocessService(OwnerDelegator):
             self._abort_single_item(item, pending_key, reason, ctx)
             return task, False
 
-        # 2. 检查完成状态（任务标记完成 或 暂存目录中【本文件】已就位）
+        # 2. 检查完成状态：网盘任务 completed，或暂存目录里有【明确属于本任务】的文件。
+        #    目录里别人的文件（特别篇、旧残留、其他季）不算；任务仍在跑（未到 100% 或没有 file_id）时一律未完成。
         staging_dir = str(item.get("staging_dir") or item.get("cloud_dir") or "/")
-        directory_valid, file_index = self._snapshot(ctx, staging_dir)
-        task_done = bool(
-            item.get("moved_at")
-            or (task and task.get("completed"))
-        )
-        if not task_done and directory_valid and file_index:
-            if self._task_type(item) == "magnet":
-                # 磁力整包：目录出现内容即交由 Magnet 流程整理
-                task_done = True
-            else:
-                # ed2k/离线：目录里有别的集不等于本集下完，按名称/哈希/模糊名/季集精确匹配
-                candidate_names = [
-                    str(item.get("staging_name") or ""),
-                    str(item.get("file_name") or ""),
-                    str(item.get("source_file_name") or ""),
-                ]
-                target_hash = self._extract_item_hash(item)
-                task_done = bool(
-                    self._match_by_name(file_index, candidate_names)
-                    or self._match_by_hash(file_index, target_hash)
-                    or self._match_by_fuzzy_name(file_index, candidate_names)
-                    or self._match_by_season_episode(file_index, item, candidate_names)
-                )
+        verified = ""
+        if item.get("moved_at"):
+            verified = "moved"
+        elif task and task.get("completed"):
+            verified = "task"
+        elif not self._offline_task_still_running(task):
+            directory_valid, file_index = self._snapshot(ctx, staging_dir)
+            if directory_valid and file_index and self._offline_item_files_ready(
+                    item, file_index, task
+            ):
+                verified = "files"
 
-        if task_done:
+        if verified:
             item.setdefault("download_completed_at", ctx.now)
+            item["download_verified"] = verified
             return task, True
 
         # 3. 未完成：判断超时或调度重试
@@ -1572,6 +1572,83 @@ class PostprocessService(OwnerDelegator):
             item, pending_key, "locate", f"等待离线下载完成（将在 {retry_minutes} 分钟后复查）"
         )
         return task, False
+
+    @staticmethod
+    def _offline_task_still_running(task: Optional[Dict[str, Any]]) -> bool:
+        """网盘任务仍在下载：未完成且（进度未满或没有落地 file_id）。找不到任务时返回 False。"""
+        if not task or task.get("completed") or task.get("failed"):
+            return False
+        try:
+            percent = float(task.get("percent") or 0)
+        except (TypeError, ValueError):
+            percent = 0.0
+        return percent < 100 or not str(task.get("file_id") or "").strip()
+
+    def _offline_item_files_ready(
+            self,
+            item: Dict[str, Any],
+            file_index: "DirectoryFileIndex",
+            task: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """目录里是否有明确属于本离线任务的文件：file_id / info_hash / 本条文件名 / 本条目标季集。"""
+        file_ids = {
+            str(value or "").strip()
+            for value in (
+                (task or {}).get("file_id"),
+                item.get("file_id"),
+                item.get("offline_file_id"),
+            )
+            if str(value or "").strip()
+        }
+        info_hash = str(
+            self._offline_native_task_id(item) if hasattr(self, "_offline_native_task_id")
+            else item.get("task_id") or ""
+        ).strip().upper()
+        for name, file_obj in file_index.items():
+            try:
+                file_id = str(file_obj.get("id") or file_obj.get("file_id") or "").strip()
+            except AttributeError:
+                file_id = str(getattr(file_obj, "id", "") or "").strip()
+            if file_id and file_id in file_ids:
+                return True
+            if (
+                    info_hash
+                    and re.fullmatch(r"[0-9A-F]{40}|[0-9A-F]{32}", info_hash)
+                    and info_hash in str(name or "").upper()
+            ):
+                return True
+
+        candidate_names = [
+            name for name in (
+                str(item.get("staging_name") or "").strip(),
+                str(item.get("file_name") or "").strip(),
+                str(item.get("source_file_name") or "").strip(),
+            ) if name
+        ]
+        if self._match_by_name(file_index, candidate_names):
+            return True
+        if self._match_by_hash(file_index, self._extract_item_hash(item)):
+            return True
+        if self._task_type(item) == "magnet":
+            # 磁力整包的展示名往往只是剧名（如「全职高手」），模糊名会把同目录的特别篇当成本任务；
+            # 只认本条记录的目标季集。
+            try:
+                season = int(item.get("season"))
+            except (TypeError, ValueError):
+                return False
+            if not hasattr(file_index, "get_by_season_episode"):
+                return False
+            for value in item.get("target_episodes") or []:
+                try:
+                    if file_index.get_by_season_episode(season, int(value)):
+                        return True
+                except (TypeError, ValueError):
+                    continue
+            return False
+        return bool(
+            self._match_by_fuzzy_name(file_index, candidate_names)
+            or self._match_by_season_episode(file_index, item, candidate_names)
+        )
 
     def _finalize_magnet_due_item(
             self,

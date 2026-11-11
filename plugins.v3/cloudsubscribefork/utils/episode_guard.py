@@ -246,7 +246,7 @@ class SeasonGuard:
     def match_strength(self, item: Mapping, episode: int) -> Tuple[bool, List[str]]:
         """规则已放行的文件，依据是否足够硬。
 
-        强匹配：文件名或目录自带本季季号，或文件日期在本季年份且与该集播出日吻合；
+        强匹配：文件名或目录自带本季季号（分享标题是多季合集也一样），或文件日期在本季年份且与该集播出日吻合；
         第一季在没有任何季号线索时也算强匹配。返回 (是否强匹配, 弱匹配原因列表)。
         """
         name = str((item or {}).get("name") or "")
@@ -257,12 +257,12 @@ class SeasonGuard:
         reasons: List[str] = []
         if _EXTRA_CONTENT_PATTERN.search(name):
             reasons.append("文件名带加更、花絮、预告等字样，可能不是正片")
-        if _PACK_TITLE_PATTERN.search(self.share_title or ""):
-            reasons.append("分享标题像多季合集")
-
         file_season = any(
             self.season in MediaFileParser.season_numbers(level) for level in levels
         )
+        # 合集标题只在文件自己没有本季季号时才算疑点：文件名已是 S02E01 的「全3季」包按强匹配直接转存
+        if _PACK_TITLE_PATTERN.search(self.share_title or "") and not file_season:
+            reasons.append("分享标题像多季合集")
         file_date = None
         for level in levels:
             file_date = MediaFileParser.extract_date(level)

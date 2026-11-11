@@ -32,6 +32,24 @@ class ResourceTransferService(OwnerDelegator):
         r"(?<![A-Za-z0-9])[Ss]\s*0*(\d{1,3})(?!\d)|"
         r"第\s*0*(\d{1,3})\s*季"
     )
+    # 第二季 / 第十二季：中文数字季号
+    _TITLE_CN_SEASON_PATTERN = re.compile(r"第\s*([零一二两三四五六七八九十]{1,4})\s*季")
+    # 特别篇 / SP / OVA / OAD 包；返回季号 0（S00），绝不当成普通季
+    _SPECIAL_TITLE_PATTERN = re.compile(
+        r"特别篇|特別篇|(?<![A-Za-z0-9])SP(?:[\s._-]*\d{1,3})?(?![A-Za-z0-9])"
+        r"|(?<![A-Za-z0-9])(?i:OVA|OAD|Specials?)(?:[\s._-]*\d{1,3})?(?![A-Za-z0-9])"
+        r"|(?<![A-Za-z0-9])[Ss]0{1,2}(?![0-9])"
+    )
+    # 覆盖正季的合集写法：全3季、1-3季、S01-S03
+    _REGULAR_PACK_PATTERN = re.compile(
+        r"全\s*[0-9一二三四五六七八九十]+\s*季"
+        r"|[0-9一二三四五六七八九十]+\s*[-~～至到]\s*[0-9一二三四五六七八九十]+\s*季"
+        r"|(?<![A-Za-z0-9])S\d{1,2}\s*[-~]\s*S?\d{1,2}(?![0-9Ee])",
+        re.IGNORECASE,
+    )
+
+    # 离线下载类资源：只在直接分享都试过之后作为后手
+    _OFFLINE_RESOURCE_TYPES = frozenset({"magnet", "ed2k"})
 
     @staticmethod
     def _is_cloud_resource_url(value: str) -> bool:
@@ -210,13 +228,46 @@ class ResourceTransferService(OwnerDelegator):
 
     @classmethod
     def _resource_title_seasons(cls, title: str) -> Set[int]:
-        """提取标题中明确声明的季号。"""
+        """提取标题中明确声明的季号（S02、第2季、第二季）。"""
         seasons = set()
-        for match in cls._TITLE_SEASON_PATTERN.finditer(str(title or "")):
+        text = str(title or "")
+        for match in cls._TITLE_SEASON_PATTERN.finditer(text):
             value = match.group(1) or match.group(2)
             if value and int(value) > 0:
                 seasons.add(int(value))
+        for match in cls._TITLE_CN_SEASON_PATTERN.finditer(text):
+            value = MediaFileParser._issue_number(match.group(1))
+            if value and value > 0:
+                seasons.add(int(value))
         return seasons
+
+    @classmethod
+    def _is_special_only_title(cls, title: str) -> bool:
+        """标题是纯特别篇 / SP / OVA / OAD 包：带特别篇标记，且没有正季季号或正季合集写法。
+
+        「全3季+电影版特别篇」「S02 + 特别篇」这类正季合集顺带特别篇的不算。
+        """
+        text = str(title or "")
+        if not text or not cls._SPECIAL_TITLE_PATTERN.search(text):
+            return False
+        if cls._resource_title_seasons(text) or MediaFileParser.season_numbers(text):
+            return False
+        return not cls._REGULAR_PACK_PATTERN.search(text)
+
+    @classmethod
+    def _movie_title_seasons_conflict(
+            cls, title_seasons: Set[int], mediainfo: Any = None
+    ) -> bool:
+        """电影订阅遇到带季号的离线资源：正季一律排除；纯特别篇只在电影名本身不是特别篇时排除。"""
+        if any(int(value) > 0 for value in title_seasons or ()):
+            return True
+        if 0 not in (title_seasons or ()):
+            return False
+        movie_title = " ".join(
+            str(getattr(mediainfo, key, "") or "")
+            for key in ("title", "original_title", "en_title")
+        )
+        return not cls._SPECIAL_TITLE_PATTERN.search(movie_title)
 
     @staticmethod
     def _magnet_resource_title(resource: Dict[str, Any]) -> str:
@@ -298,16 +349,21 @@ class ResourceTransferService(OwnerDelegator):
 
     @classmethod
     def _magnet_title_seasons(cls, resource: Dict[str, Any]) -> Set[int]:
-        """从统一标题和来源结构化字段提取明确季号。"""
-        seasons = cls._resource_title_seasons(
-            cls._magnet_resource_title(resource)
-        )
+        """从统一标题和来源结构化字段提取明确季号。
+
+        纯特别篇 / SP / OVA / OAD 包没有正季季号时返回 {0}（S00），
+        让各处「标题季数不含目标季」的预过滤把它挡在普通季之外，不会整包绑到 S02/S03 的缺集上。
+        """
+        title = cls._magnet_resource_title(resource)
+        seasons = cls._resource_title_seasons(title)
         try:
             structured = int(resource.get("season") or 0)
         except (TypeError, ValueError):
             structured = 0
         if structured > 0:
             seasons.add(structured)
+        if not seasons and cls._is_special_only_title(title):
+            seasons.add(0)
         return seasons
 
     def _offline_link_size(self, url: str) -> int:
@@ -928,7 +984,9 @@ class ResourceTransferService(OwnerDelegator):
     ) -> List[Tuple[str, List[Dict[str, Any]], bool]]:
         """严格按用户配置的资源类型优先级（resource_type_order）组织并发搜索候选批次。
 
-        先按资源类型优先级全局排序，同类型按搜索源优先级组织；跨盘转存批次置于最后。
+        先按资源类型优先级全局排序，同类型按搜索源优先级组织；跨盘转存批次排在直存分享之后。
+        Magnet / ED2K 等离线资源无论配置顺序如何都排在全部分享批次之后：
+        本轮先把能直接转存的 115 / 夸克等分享试完，离线下载只做后手。
         """
         # 读取用户配置的资源类型优先级
         configured_types = list(
@@ -953,23 +1011,37 @@ class ResourceTransferService(OwnerDelegator):
                     direct_by_type.setdefault(rtype, {}).setdefault(source, []).append(resource)
                     total_direct_count += 1
 
-        # 严格按用户配置的资源类型优先级产出直存批次
+        # 严格按用户配置的资源类型优先级产出直存批次（离线类型除外）
         ordered_batches: List[Tuple[str, List[Dict[str, Any]], bool]] = []
+        offline_batches: List[Tuple[str, List[Dict[str, Any]], bool]] = []
         ordered_type_keys = [t for t in configured_types if t in direct_by_type]
         remaining_type_keys = [t for t in direct_by_type if t not in configured_types]
 
         for rtype in ordered_type_keys + remaining_type_keys:
             sources_map = direct_by_type[rtype]
+            target = offline_batches if rtype in self._OFFLINE_RESOURCE_TYPES else ordered_batches
             for source in sources or []:
                 items = sources_map.get(source)
                 if items:
-                    ordered_batches.append((source, items, False))
+                    target.append((source, items, False))
 
-        # 跨盘转存批次置于直存之后，按搜索源优先级排列
+        # 跨盘转存批次置于直存之后，按搜索源优先级排列；跨盘离线资源同样放到最后
+        cross_offline: List[Tuple[str, List[Dict[str, Any]], bool]] = []
         for source in sources or []:
             items = cross_by_source.get(source)
-            if items:
-                ordered_batches.append((source, items, True))
+            if not items:
+                continue
+            share_items = [
+                item for item in items
+                if self._normalize_candidate_resource_type(item) not in self._OFFLINE_RESOURCE_TYPES
+            ]
+            offline_items = [item for item in items if item not in share_items]
+            if share_items:
+                ordered_batches.append((source, share_items, True))
+            if offline_items:
+                cross_offline.append((source, offline_items, True))
+        ordered_batches.extend(offline_batches)
+        ordered_batches.extend(cross_offline)
 
         if total_direct_count or total_cross_count:
             type_summary = " > ".join(ordered_type_keys + remaining_type_keys)

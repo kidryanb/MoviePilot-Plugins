@@ -79,6 +79,7 @@ from ...core.media import (
 from ...drive.scanner import get_driver_definitions
 from ...utils import StrmGenerator, StrmTemplateError
 from ...utils.cache import create_platform_ttl_cache
+from ...utils.offline_blacklist import PersistentTTLStore
 
 _COMPONENT_TYPES = (
     MovieSyncProcessor,
@@ -274,9 +275,10 @@ class SyncHandler(DriveScopeMixin):
         )
         self._share_transfer_risk_lock = threading.Lock()
         self._share_transfer_blocked_until: Dict[str, float] = {}
-        self._offline_blacklist = create_platform_ttl_cache(
-            "offline_blacklist",
-            ttl=86400,
+        # 离线黑名单持久化到插件数据目录：重载 / 重启 / 版本切换后仍在，1 天过期
+        self._offline_blacklist = PersistentTTLStore(
+            self._offline_blacklist_path(plugin),
+            ttl=self._OFFLINE_BLACKLIST_TTL,
             maxsize=10000,
         )
         self._skip_other_season_dirs = bool(_get_val("skip_other_season_dirs", True))
@@ -1487,6 +1489,33 @@ class SyncHandler(DriveScopeMixin):
         norm = self._normalize_offline_key(url)
         return norm or (url.split("&")[0] if self._is_magnet_url(url) else url)
 
+    _OFFLINE_BLACKLIST_TTL = 86400
+    _OFFLINE_BLACKLIST_FILE = "offline_blacklist.json"
+
+    @classmethod
+    def _offline_blacklist_path(cls, plugin: Any) -> Optional[Path]:
+        """黑名单文件放在插件数据目录（与 cloudsubscribe.db 同目录）；宿主不提供时退化为内存。"""
+        getter = getattr(plugin, "get_data_path", None)
+        if not callable(getter):
+            return None
+        try:
+            data_path = getter()
+        except Exception as error:
+            logger.debug(f"读取插件数据目录失败，离线黑名单仅保存在内存：{error}")
+            return None
+        return Path(data_path) / cls._OFFLINE_BLACKLIST_FILE if data_path else None
+
+    @classmethod
+    def _offline_key_label(cls, key_or_url: str) -> str:
+        """日志用的黑名单键：磁力 / ed2k 显示指纹，普通链接只显示主机，避免签名参数进日志。"""
+        norm = cls._normalize_offline_key(key_or_url)
+        if norm.startswith(("magnet:", "ed2k:")):
+            return norm
+        if norm.startswith(("http://", "https://", "ftp://")):
+            host = re.sub(r"^[a-z]+://", "", norm).split("/", 1)[0].split("?", 1)[0]
+            return f"{host}/…"
+        return norm[:48]
+
     def _add_offline_blacklist(self, key_or_url: str, reason: str = "") -> None:
         """将失败或超时的离线任务/资源以规范化唯一键加入黑名单（1天TTL）。"""
         if not key_or_url or not hasattr(self, "_offline_blacklist"):
@@ -1501,7 +1530,9 @@ class SyncHandler(DriveScopeMixin):
         for k in keys:
             if k:
                 self._offline_blacklist[k] = {"reason": reason, "time": now}
-        logger.info(f"🚫 离线资源已加入黑名单（1天过期）：{norm_key}，原因：{reason}")
+        logger.info(
+            f"🚫 离线资源已加入黑名单（1天过期）：{self._offline_key_label(key_or_url)}，原因：{reason}"
+        )
 
     def _remove_offline_blacklist(self, key_or_url: str) -> None:
         """从黑名单中移除指定的离线任务。"""
@@ -1668,8 +1699,13 @@ class SyncHandler(DriveScopeMixin):
             upgrade_baseline: Optional[Dict[str, Any]] = None,
             transient_target: bool = False,
             submit_queue: Optional[List[Dict[str, Any]]] = None,
+            require_episode_evidence: bool = True,
     ) -> str:
-        """提交离线下载（Magnet/ED2K/直链离线等）到隔离目录；下载完成后再按真实文件树匹配。"""
+        """提交离线下载（Magnet/ED2K/直链离线等）到隔离目录；下载完成后再按真实文件树匹配。
+
+        require_episode_evidence：剧集自动同步时为 True，标题、预览和种子文件列表都没有集数证据的
+        Magnet 不再把当前全部缺集整包绑上去（只凭「第 N 季」不够）。
+        """
         magnet_title = self._prepare_magnet_resource(resource, share_url)
         metadata = resource.get("magnet_metadata") or {}
         title_seasons = self._magnet_title_seasons(resource)
@@ -1680,9 +1716,9 @@ class SyncHandler(DriveScopeMixin):
                 f"目标季数=S{int(season):02d}，标题={magnet_title or share_url}"
             )
             return ""
-        if season is None and title_seasons:
+        if season is None and self._movie_title_seasons_conflict(title_seasons, mediainfo):
             logger.debug(
-                "电影离线资源包含剧集季数，预过滤排除："
+                "电影离线资源包含剧集季数或是特别篇包，预过滤排除："
                 f"标题季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
                 f"标题={magnet_title or share_url}"
             )
@@ -1763,7 +1799,7 @@ class SyncHandler(DriveScopeMixin):
                         f"目标季数=S{int(season):02d}，标题={magnet_title or share_url}"
                     )
                     return ""
-                if season is None and title_seasons:
+                if season is None and self._movie_title_seasons_conflict(title_seasons, mediainfo):
                     logger.debug(
                         "Magnet 远端内容元数据包含剧集季数，与电影订阅不匹配，已跳过："
                         f"内容季数={','.join(f'S{value:02d}' for value in sorted(title_seasons))}，"
@@ -1797,6 +1833,18 @@ class SyncHandler(DriveScopeMixin):
             logger.debug(
                 "离线资源标题和元数据均未提供可确认内容，已跳过："
                 f"{magnet_title or share_url}"
+            )
+            return ""
+        if (
+                season is not None
+                and require_episode_evidence
+                and self._is_magnet_url(share_url)
+                and not title_episodes
+                and not preview_episodes
+        ):
+            logger.info(
+                "Magnet 标题、预览和种子文件列表都没有集数，不整包绑定当前缺集，已跳过："
+                f"{magnet_title or self._resource_log_reference(share_url)}"
             )
             return ""
         if season is not None and target_episodes and preview_episodes:
@@ -1987,16 +2035,42 @@ class SyncHandler(DriveScopeMixin):
             f"离线任务已提交：{pending[pending_key].get('staging_name') or pending[pending_key]['file_name']}"
         )
 
-    def _rollback_offline_submission(self, context: Dict[str, Any]) -> None:
+    def _rollback_offline_submission(
+            self, context: Dict[str, Any], reason: str = "提交离线下载失败"
+    ) -> None:
         pending_key = str(context.get("pending_key") or "")
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
             if pending_key in pending and pending[pending_key].get("status") == "submitting":
                 pending.pop(pending_key, None)
                 self._save_offline_pending(pending)
-        self._add_offline_blacklist(
-            str(context.get("share_url") or ""), "提交离线下载失败"
+        self._add_offline_blacklist(str(context.get("share_url") or ""), reason)
+
+    def _existing_offline_task(self, share_url: str) -> Optional[Dict[str, Any]]:
+        """当前作用域网盘的离线任务列表里同一 hash 的任务；读不到列表或没有时返回 None。"""
+        info_hash = self._offline_hash(share_url)
+        if not info_hash:
+            return None
+        snapshot_func = getattr(
+            getattr(self, "_offline_tasks", None), "get_offline_task_list_snapshot", None
         )
+        if not callable(snapshot_func):
+            return None
+        try:
+            tasks = (snapshot_func() or {}).get("tasks") or []
+        except Exception as error:
+            logger.debug(f"读取离线任务列表失败，按未提交处理：{error}")
+            return None
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            ids = {
+                re.sub(r"[^0-9A-Za-z]", "", str(task.get(key) or "")).upper()
+                for key in ("id", "native_id", "info_hash", "hash")
+            }
+            if info_hash.upper() in ids:
+                return task
+        return None
 
     def _submit_offline_packages(
             self, contexts: List[Dict[str, Any]]
@@ -2016,6 +2090,19 @@ class SyncHandler(DriveScopeMixin):
                     offline_download = self._offline_download
                     if offline_download is None:
                         raise RuntimeError("当前网盘不支持离线下载")
+                    existing = self._existing_offline_task(item["share_url"])
+                    if existing is not None and not existing.get("completed"):
+                        # 网盘上已有同一 hash 的未完成任务：不重复提交，也不当作提交成功，
+                        # 否则会再建一条 pending，被目录里的其它文件误判成完成
+                        logger.info(
+                            "网盘已有同一离线任务且尚未完成，跳过重复提交："
+                            f"{self._offline_key_label(item['share_url'])}，"
+                            f"状态={existing.get('status_text') or existing.get('state') or '未知'}"
+                        )
+                        self._rollback_offline_submission(
+                            item, reason="网盘已有同一离线任务且尚未完成"
+                        )
+                        continue
                     res = offline_download.add_offline_download(
                         item["share_url"],
                         item["staging_dir"],
@@ -3096,8 +3183,12 @@ class SyncHandler(DriveScopeMixin):
             share_url: str,
             matched_items: List[Dict[str, Any]],
             is_cross: bool = False,
+            held_episodes: Optional[Set[int]] = None,
     ) -> List[Dict[str, Any]]:
-        """规则放行后、转存前：弱匹配交给 AI 裁决，存疑的进待复核，不转存。"""
+        """规则放行后、转存前：弱匹配交给 AI 裁决，存疑的进待复核，不转存。
+
+        held_episodes：进了待复核的集号写到这里，调用方同一轮不再拿磁力/离线去填这些集。
+        """
         gate = getattr(self, "_ai_gate", None)
         if not matched_items or gate is None or not gate.active():
             return matched_items
@@ -3173,6 +3264,8 @@ class SyncHandler(DriveScopeMixin):
                 },
             })
             logger.info(f"AI 季集裁决待复核 {label}：{decision.reason}")
+            if held_episodes is not None:
+                held_episodes.add(int(entry["episode"]))
             if review_id:
                 new_reviews.append(f"{label}（{decision.reason}）")
         if new_reviews:

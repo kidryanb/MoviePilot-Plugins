@@ -159,7 +159,10 @@ class MediaInfoPrefiller:
             logger: Optional[logging.Logger] = None,
             clock: Callable[[], float] = time.monotonic,
             sleep: Optional[Callable[[float], None]] = None,
+            background: bool = True,
     ):
+        """background=False 时不启后台线程，只由 run_due 同步处理（单测用，避免与后台线程抢同一条）。"""
+        self._background = bool(background)
         self._http = http
         self._servers = servers
         self.path_mappings = str(path_mappings or "")
@@ -174,6 +177,8 @@ class MediaInfoPrefiller:
         self._wake = threading.Event()
         self._sleep = sleep or (lambda seconds: self._stop.wait(seconds))
         self._lock = threading.Lock()
+        # 后台线程与 run_due（手动触发）串行取条目并处理，同一条不会被两边同时预读
+        self._process_lock = threading.Lock()
         self._queue: Dict[str, PrefillTarget] = {}
         self._thread: Optional[threading.Thread] = None
         self._last_request_at: Optional[float] = None
@@ -217,6 +222,8 @@ class MediaInfoPrefiller:
     # ---------- 后台线程 ----------
 
     def _ensure_worker(self) -> None:
+        if not self._background:
+            return
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return
@@ -241,21 +248,23 @@ class MediaInfoPrefiller:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            target, wait = self._next_due()
-            if target is None:
-                self._wake.wait(min(wait, 3600.0))
-                self._wake.clear()
-                continue
-            self.run_once(target)
+            with self._process_lock:
+                target, wait = self._next_due()
+                if target is not None:
+                    self.run_once(target)
+                    continue
+            self._wake.wait(min(wait, 3600.0))
+            self._wake.clear()
 
     def run_due(self) -> int:
         """同步处理当前到期的全部条目（测试与手动触发用）。"""
         handled = 0
         while not self._stop.is_set():
-            target, _ = self._next_due()
-            if target is None:
-                return handled
-            self.run_once(target)
+            with self._process_lock:
+                target, _ = self._next_due()
+                if target is None:
+                    return handled
+                self.run_once(target)
             handled += 1
         return handled
 

@@ -313,6 +313,8 @@ class TelevisionSyncProcessor(OwnerDelegator):
                 enabled_sources, prefetched_results
             )
             seen_share_urls = set()
+            # 本轮直接分享已能覆盖、但被 AI 门控送去待复核的集：同一轮不再用磁力/离线去填
+            share_held_episodes: Set[int] = set()
             search_label = self._search_handler._search_label(
                 mediainfo, MediaType.TV, season
             )
@@ -426,6 +428,12 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     resource, share_url
                                 )
                                 title_seasons = self._magnet_title_seasons(resource)
+                                if title_seasons == {0} and season:
+                                    logger.debug(
+                                        f"离线资源是特别篇/SP/OVA 包，不绑定到普通季 S{season:02d}："
+                                        f"{magnet_title or resource_title}"
+                                    )
+                                    continue
                                 if title_seasons and season not in title_seasons:
                                     logger.debug(
                                         f"离线资源标题预过滤排除：标题季数="
@@ -469,6 +477,17 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     )
                                     target_episodes = sorted(target_episode_set)
 
+                                if share_held_episodes and not manual_resources:
+                                    held = set(target_episodes) & share_held_episodes
+                                    if held:
+                                        logger.info(
+                                            f"{search_prefix} 直接分享已覆盖 "
+                                            f"{self._format_episode_ranges(held)}（待复核），"
+                                            f"本轮不再用离线资源补这些集：{magnet_title or resource_title}"
+                                        )
+                                        target_episodes = sorted(set(target_episodes) - held)
+                                        if not target_episodes:
+                                            continue
                                 if not self._validate_resource_url(
                                         share_url,
                                         resource_label="Magnet 链接" if self._is_magnet_url(share_url) else "离线下载链接",
@@ -493,6 +512,7 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     sub_key=sub_key if track_points else "",
                                     transient_target=transient_target,
                                     submit_queue=offline_submit_queue,
+                                    require_episode_evidence=not manual_resources,
                                 )
                                 if not pending_key:
                                     continue
@@ -562,6 +582,11 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                 ))
                                 continue
 
+                            if not share_files:
+                                logger.info(
+                                    f"{search_prefix} 分享已跳过（列举为空、已取消或无法访问）：{resource_title}"
+                                )
+                                continue
                             video_count, share_episodes = self._summarize_share_episodes(
                                 share_files,
                                 season,
@@ -585,9 +610,9 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     if is_cross_batch
                                     else "目标网盘分享未识别到目标季集数"
                                 )
-                                logger.debug(
-                                    f"{reason}：{mediainfo.title_year} "
-                                    f"S{season:02d}，已跳过该资源"
+                                logger.info(
+                                    f"{search_prefix} 分享已跳过（{reason}）：{resource_title}，"
+                                    f"{mediainfo.title_year} S{season:02d}"
                                 )
                                 continue
                             # 收集该分享中所有匹配的文件
@@ -681,8 +706,19 @@ class TelevisionSyncProcessor(OwnerDelegator):
                                     subscribe, mediainfo, season, resource_guard,
                                     resource, share_url, matched_items,
                                     is_cross=is_cross_batch,
+                                    held_episodes=share_held_episodes,
                                 )
+                                if not matched_items:
+                                    logger.info(
+                                        f"{search_prefix} 分享已跳过（匹配文件全部进入 AI 待复核或被拒绝）：{resource_title}"
+                                    )
+                                    continue
                             if not matched_items:
+                                logger.info(
+                                    f"{search_prefix} 分享已跳过（季集对不上当前缺集 "
+                                    f"{self._format_episode_ranges(missing_episode_set)}，"
+                                    f"分享可识别集数={self._format_episode_ranges(share_episodes)}）：{resource_title}"
+                                )
                                 continue
 
                             cloud_resource = self._is_cloud_resource_url(share_url)
