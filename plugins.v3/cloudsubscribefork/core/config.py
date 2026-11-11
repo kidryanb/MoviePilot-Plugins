@@ -144,6 +144,8 @@ class UIConfig:
             "media_server_path_mappings": "",
             "media_server_refresh_delay": 0,
             "emby_mediainfo_enabled": False,
+            "prefill_mediainfo_enabled": False,
+            "prefill_mediainfo_source_paths": "",
             "platform_media_sync_enabled": False,
             "platform_delete_linkage_enabled": True,
             "platform_transfer_history_enabled": False,

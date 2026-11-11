@@ -1,6 +1,6 @@
 # Fork of https://github.com/odomu/MoviePilot-Plugins
 # commit 876462067593d4fc2f7bc038f2f73d3eaf099b76（上游 CloudSubscribe v1.7.7）。
-# 本仓库 plugin_version 0.5.10：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
+# 本仓库 plugin_version 0.5.11：插件 ID 为 CloudSubscribeFork（与原版共存），适配 MP V3 SDK、与 DownloadCloudUpload 共存（core/coexist.py）、同盘优先转存与跨盘中转、离线、洗版、重试按实际网盘处理（core/drive_routing.py）、夸克 STRM 代理短链。
 # 许可：GPL-3.0-only，全文见本目录 LICENSE。
 """
 网盘订阅助手插件
@@ -67,6 +67,7 @@ from .core.storage import CloudSubscribeDataStore
 from .core.subscribe import AutoSubscribeService
 from .drive.scanner import DriverRegistry
 from .handlers import SearchHandler, SyncHandler, SubscribeHandler, WebhookHandler
+from .handlers.notification import MediaInfoPrefiller, emby_prefill_servers, emby_request
 from .search.scanner import SearchSourceRegistry
 from .subscribe import (  # noqa: F401 - 导入即注册自动订阅渠道
     create_anilist_provider,
@@ -123,7 +124,7 @@ class CloudSubscribeFork(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/kidryanb/MoviePilot-Plugins/main/icons/cloud.png"
     # 插件版本
-    plugin_version = "0.5.10"
+    plugin_version = "0.5.11"
     # 插件作者
     plugin_author = "kidryanb"
     # 作者主页
@@ -242,6 +243,10 @@ class CloudSubscribeFork(_PluginBase):
     _media_server_path_mappings: str = ""
     _media_server_refresh_delay: int = 0
     _emby_mediainfo_enabled: bool = False
+    # 新入库 STRM 预读媒体信息（单条 PlaybackInfo，不刷新媒体库）
+    _prefill_mediainfo_enabled: bool = False
+    _prefill_mediainfo_source_paths: str = ""
+    _mediainfo_prefiller: Optional[MediaInfoPrefiller] = None
     _platform_media_sync_enabled: bool = False
     _strm_proxy_server: Optional[Any] = None
     _strm_proxy_status: Optional[Dict[str, Any]] = None
@@ -539,6 +544,8 @@ class CloudSubscribeFork(_PluginBase):
             "media_server_path_mappings",
             "media_server_refresh_delay",
             "emby_mediainfo_enabled",
+            "prefill_mediainfo_enabled",
+            "prefill_mediainfo_source_paths",
             "platform_media_sync_enabled",
             "platform_delete_linkage_enabled",
             "video_extensions",
@@ -734,6 +741,7 @@ class CloudSubscribeFork(_PluginBase):
         self._platform_media_sync_enabled = bool(
             config.get("platform_media_sync_enabled", False)
         )
+        self._apply_prefill_config(config)
         self._platform_delete_linkage_enabled = bool(
             config.get("platform_delete_linkage_enabled", True)
         )
@@ -756,6 +764,31 @@ class CloudSubscribeFork(_PluginBase):
             method=self._webhook_method,
             timeout=self._webhook_timeout,
         )
+
+    def _apply_prefill_config(self, config: Dict[str, Any]) -> None:
+        """预读开关：关闭时停掉队列；打开时复用入库通知的服务器选择与路径映射。"""
+        self._prefill_mediainfo_enabled = bool(config.get("prefill_mediainfo_enabled", False))
+        self._prefill_mediainfo_source_paths = str(
+            config.get("prefill_mediainfo_source_paths", "") or ""
+        ).strip()
+        prefiller = self._mediainfo_prefiller
+        if not self._prefill_mediainfo_enabled:
+            if prefiller:
+                prefiller.close()
+            self._mediainfo_prefiller = None
+            return
+        roots = self._prefill_mediainfo_source_paths.splitlines()
+        if prefiller:
+            prefiller.configure(self._media_server_path_mappings, roots)
+            return
+        self._mediainfo_prefiller = MediaInfoPrefiller(
+            http=emby_request,
+            servers=lambda: emby_prefill_servers(self._media_servers),
+            path_mappings=self._media_server_path_mappings,
+            source_roots=roots,
+            logger=logger,
+        )
+        logger.info("新入库 STRM 媒体信息预读已开启（单条 PlaybackInfo，不刷新媒体库）")
 
     def _apply_base_config(self, config: Dict[str, Any]) -> None:
         self._enabled = config.get("enabled", False)
@@ -1111,6 +1144,10 @@ class CloudSubscribeFork(_PluginBase):
     def stop_service(self, preserve_subscribe_queue: bool = False):
         """停止服务"""
         self._run_bounded("停止播放代理监听", self._stop_strm_proxy_server)
+        prefiller = self._mediainfo_prefiller
+        self._mediainfo_prefiller = None
+        if prefiller:
+            prefiller.close()
         if not preserve_subscribe_queue and self._subscribe_search_queue_lock is not None:
             self.cancel_pending_subscribe_searches(shutdown=True)
             executor = self._sync_operation_executor
