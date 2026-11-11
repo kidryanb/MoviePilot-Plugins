@@ -342,14 +342,25 @@ class DebugLogTest(unittest.TestCase):
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
         file_id = 'fid-0123456789abcdef'
+        def request_lines():
+            return [line for line in stream.getvalue().splitlines() if line.startswith('请求 ')]
+
+        def wait_lines(count):
+            # 这一行在最后一个字节发出之后才记，客户端可能先读完
+            deadline = time.monotonic() + 5
+            while len(request_lines()) < count and time.monotonic() < deadline:
+                time.sleep(0.01)
+
         try:
             urlopen(env.url(file_id)).read()
+            wait_lines(1)
             urlopen(Request(env.url(file_id), headers={'Range': 'bytes=10-20'})).read()
+            wait_lines(2)
         finally:
             logger.removeHandler(handler)
             logger.setLevel(old_level)
             env.close()
-        lines = [line for line in stream.getvalue().splitlines() if line.startswith('请求 ')]
+        lines = request_lines()
         self.assertEqual(len(lines), 2)
         self.assertIn('cache=miss', lines[0])
         self.assertIn('cache=hit', lines[1])
