@@ -114,8 +114,9 @@ def make(emby, clock=None, **kwargs):
     capture = LogCapture()
     log.addHandler(capture)
     server = prefill.EmbyServer(name='emby', host='http://emby:8096', api_key=API_KEY, user_id='u1')
+    # 不启后台线程：否则 initial_delay=0 时后台线程会和 run_due 抢同一条，结果随线程调度而变
     options = dict(http=emby, servers=lambda: [server], initial_delay=0, logger=log,
-                   clock=clock, sleep=clock.sleep)
+                   clock=clock, sleep=clock.sleep, background=False)
     options.update(kwargs)
     return prefill.MediaInfoPrefiller(**options), clock, capture
 
