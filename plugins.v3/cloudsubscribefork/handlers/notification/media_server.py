@@ -915,3 +915,40 @@ class MediaServerNotifier:
             logger.warning(f"Emby 媒体信息提取异常：{name} - {file_path}，原因：{error}")
             if attempt < 4:
                 self._schedule_emby_mediainfo(name, path, attempt + 1)
+
+
+def emby_request(method: str, url: str, params: Dict[str, Any], headers: Dict[str, str],
+                 timeout: float):
+    """媒体信息预读用的 HTTP 调用：返回 (状态码, JSON)，不抛异常、不记录 URL。"""
+    utils = RequestUtils(timeout=timeout)
+    call = utils.get_res if method == "GET" else utils.post_res
+    response = call(url=url, params=params, headers=headers)
+    if response is None:
+        return None, None
+    try:
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+        return response.status_code, body
+    finally:
+        try:
+            response.close()
+        except Exception:
+            pass
+
+
+def emby_prefill_servers(names: Optional[List[str]] = None) -> List[Any]:
+    """已选择的 Emby 服务器；没选时用全部已连接的 Emby。"""
+    from .mediainfo_prefill import EmbyServer
+
+    services = MediaServerHelper().get_services(name_filters=list(names or []) or None) or {}
+    servers = []
+    for name, service in services.items():
+        if getattr(service, "type", "") != "emby":
+            continue
+        connection = MediaServerNotifier._emby_connection(name)
+        if connection:
+            host, api_key, user_id = connection
+            servers.append(EmbyServer(name=name, host=host, api_key=api_key, user_id=user_id))
+    return servers
