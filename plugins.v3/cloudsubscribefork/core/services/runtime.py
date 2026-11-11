@@ -1221,8 +1221,15 @@ class SyncRuntimeService(OwnerDelegator):
                 "pending": len(sync_handler.get_pending_finalize_tasks()),
             }
         shared_kwargs = dict(kwargs)
+        default_drive_key = str(
+            getattr(getattr(self, "_cloud_drive", None), "key", "") or ""
+        ).strip().lower()
         if (
-                any(group["needs_offline"] for group in groups)
+                any(
+                    group["needs_offline"]
+                    and (not group.get("drive_key") or group.get("drive_key") == default_drive_key)
+                    for group in groups
+                )
                 and offline_service
                 and shared_kwargs.get("offline_tasks") is None
         ):
@@ -1234,6 +1241,12 @@ class SyncRuntimeService(OwnerDelegator):
 
         def monitor_group(group_kwargs: Dict[str, Any], drive_key: str) -> Dict[str, Any]:
             # 同盘优先：后处理在记录所属网盘的作用域里执行
+            if drive_key and drive_key != default_drive_key:
+                # 默认盘的离线任务快照不属于这个盘：去掉，由后处理在该盘作用域里自行读取
+                group_kwargs = {
+                    key: value for key, value in group_kwargs.items()
+                    if key not in {"offline_tasks", "offline_tasks_valid"}
+                }
             scope = getattr(sync_handler, "drive_scope", None)
             if not callable(scope):
                 return sync_handler.monitor_offline_strm_tasks(**group_kwargs)
@@ -1365,7 +1378,15 @@ class SyncRuntimeService(OwnerDelegator):
             task_type = str(item.get("task_type") or "share").strip().lower()
             is_offline_type = task_type in {"magnet", "ed2k", "offline"}
             task_id = str(item.get("task_id") or "").upper()
-            task = task_by_id.get(task_id) if task_id else None
+            native_id = (
+                self._sync_handler._offline_native_task_id(item)
+                if self._sync_handler else task_id
+            )
+            task = (
+                (task_by_id.get(native_id) if native_id else None)
+                or (task_by_id.get(task_id) if task_id else None)
+            )
+            task_id = native_id or task_id
             # 只有明确是离线类型，或在网盘返回的离线任务中存在对应 task_id 的任务，才参与离线列表合并
             if not is_offline_type and not task:
                 continue

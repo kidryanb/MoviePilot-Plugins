@@ -1215,6 +1215,7 @@ class HistoryService(OwnerDelegator):
                 if key in keys
                    or str((item or {}).get("task_id") or "").strip().upper()
                    in normalized_task_ids
+                   or self._offline_native_task_id(item) in normalized_task_ids
             }
             if not removed_keys:
                 return set(), len(pending)

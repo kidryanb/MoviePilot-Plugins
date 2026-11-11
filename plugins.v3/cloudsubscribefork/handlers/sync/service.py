@@ -1496,7 +1496,9 @@ class SyncHandler(DriveScopeMixin):
             return
         raw_key = str(key_or_url).strip()
         now = time.time()
-        for k in {norm_key, raw_key}:
+        # 磁力 / ed2k 只记规范键：查询时同样按规范键命中，手动重试按 hash 也能清掉
+        keys = {norm_key} if norm_key.startswith(("magnet:", "ed2k:")) else {norm_key, raw_key}
+        for k in keys:
             if k:
                 self._offline_blacklist[k] = {"reason": reason, "time": now}
         logger.info(f"🚫 离线资源已加入黑名单（1天过期）：{norm_key}，原因：{reason}")
@@ -1507,9 +1509,34 @@ class SyncHandler(DriveScopeMixin):
             return
         norm_key = self._normalize_offline_key(key_or_url)
         raw_key = str(key_or_url).strip()
-        for k in (norm_key, raw_key):
+        keys = {norm_key, raw_key}
+        # 手动重试传的是网盘任务 ID（info_hash / ed2k hash），黑名单里是 magnet:/ed2k: 前缀的规范键
+        bare = raw_key.upper()
+        if re.fullmatch(r"[0-9A-F]{40}|[2-7A-Z]{32}", bare):
+            keys.add(f"magnet:{bare}")
+        if re.fullmatch(r"[0-9A-F]{32}", bare):
+            keys.add(f"ed2k:{bare}")
+        for k in keys:
             if k:
                 self._offline_blacklist.pop(k, None)
+
+    def _offline_native_task_id(self, item: Optional[Dict[str, Any]]) -> str:
+        """离线任务在网盘侧的 ID（大写）。
+
+        旧版本在网盘只回 True 时把 pending_key（如 ``magnet:HASH:12``）当 task_id 存下，
+        这里退回链接 hash，让旧记录也能对上 115 的离线任务。
+        """
+        item = item or {}
+        task_id = str(item.get("task_id") or "").strip()
+        pending_key = str(item.get("pending_key") or "").strip()
+        legacy = (
+            not task_id
+            or task_id == pending_key
+            or re.match(r"^(magnet|ed2k|offline):", task_id, re.I) is not None
+        )
+        if not legacy:
+            return task_id.upper()
+        return self._offline_hash(str(item.get("share_url") or "")) or task_id.upper()
 
     def _is_offline_blacklisted(self, resource: Optional[Dict[str, Any]] = None, share_url: str = "") -> bool:
         """按规范化唯一键检查离线资源是否在黑名单中，彻底杜绝参数变体漏判。"""
@@ -1791,6 +1818,8 @@ class SyncHandler(DriveScopeMixin):
         token = extract_magnet_hash(share_url) or hashlib.sha1(share_url.encode("utf-8")).hexdigest()[:16].upper()
         pending_key = f"{prefix}:{token}:{subscribe_id}"
         staging_dir = f"{self._cloud_transfer_path.rstrip('/')}"
+        # 记下提交时所在的网盘：电视剧离线队列在资源作用域外统一提交，必须回到这个盘
+        drive_key = str(self.scoped_drive_key() or "")
 
         with self._offline_pending_lock:
             pending = self._get_data(self._OFFLINE_PENDING_KEY) or {}
@@ -1815,6 +1844,7 @@ class SyncHandler(DriveScopeMixin):
                 "pending_key": pending_key,
                 "task_type": prefix,
                 "status": "submitting",
+                "drive_key": drive_key,
                 "subscribe_id": subscribe_id,
                 "season": season,
                 "target_episodes": sorted({int(value) for value in (target_episodes or []) if int(value) > 0}),
@@ -1829,6 +1859,7 @@ class SyncHandler(DriveScopeMixin):
 
         submit_context = {
             "pending_key": pending_key,
+            "drive_key": drive_key,
             "prefix": prefix,
             "share_url": share_url,
             "staging_dir": staging_dir,
@@ -1904,7 +1935,13 @@ class SyncHandler(DriveScopeMixin):
             pending[pending_key] = {
                 "pending_key": pending_key,
                 "task_type": prefix,
-                "task_id": str(context.get("task_id") or "").strip() or pending_key,
+                # 网盘没回任务 ID 时用链接 hash（115 的离线任务以 info_hash 标识），监控才能对上任务状态
+                "task_id": (
+                    str(context.get("task_id") or "").strip()
+                    or self._offline_hash(share_url)
+                    or pending_key
+                ),
+                "drive_key": str(context.get("drive_key") or ""),
                 "share_url": share_url,
                 "staging_dir": staging_dir,
                 "cloud_dir": target_dir or staging_dir,
@@ -1973,22 +2010,27 @@ class SyncHandler(DriveScopeMixin):
         for index, item in enumerate(contexts):
             if index > 0:
                 time.sleep(1.5)
-            try:
-                res = self._offline_download.add_offline_download(
-                    item["share_url"],
-                    item["staging_dir"],
-                    target_name=item.get("file_name"),
-                )
-                if res:
-                    if isinstance(res, str) and res.lower() != "true":
-                        item["task_id"] = res
-                    self._complete_offline_submission(item)
-                    successful_keys.add(str(item["pending_key"]))
-                else:
+            # 回到排队时所在的网盘作用域（同盘优先 / 默认盘无离线能力时切到的离线盘）
+            with self.drive_scope(item.get("drive_key")):
+                try:
+                    offline_download = self._offline_download
+                    if offline_download is None:
+                        raise RuntimeError("当前网盘不支持离线下载")
+                    res = offline_download.add_offline_download(
+                        item["share_url"],
+                        item["staging_dir"],
+                        target_name=item.get("file_name"),
+                    )
+                    if res:
+                        if isinstance(res, str) and res.lower() != "true":
+                            item["task_id"] = res
+                        self._complete_offline_submission(item)
+                        successful_keys.add(str(item["pending_key"]))
+                    else:
+                        self._rollback_offline_submission(item)
+                except Exception as error:
+                    logger.error(f"提交网盘离线下载接口异常：{error}")
                     self._rollback_offline_submission(item)
-            except Exception as error:
-                logger.error(f"提交网盘离线下载接口异常：{error}")
-                self._rollback_offline_submission(item)
 
         return successful_keys
 

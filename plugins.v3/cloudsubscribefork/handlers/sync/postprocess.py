@@ -341,7 +341,7 @@ class PostprocessService(OwnerDelegator):
             self, item: Dict[str, Any], reason: str
     ) -> None:
         """失败后清理残留离线任务：只删任务本身，已下载文件一律保留。"""
-        task_id = str(item.get("task_id") or "").strip()
+        task_id = self._offline_native_task_id(item)
         if not task_id:
             return
         delete_task = getattr(getattr(self, "_offline_tasks", None), "delete_offline_task", None)
@@ -352,6 +352,20 @@ class PostprocessService(OwnerDelegator):
             except Exception as error:
                 logger.warning(f"清理未完成的离线任务失败：{task_id}，{error}")
         logger.warning(f"离线任务未完成，保留已下载文件：{task_id}，原因：{reason}")
+
+    def _lookup_offline_task(
+            self, ctx: "PostprocessBatchContext", item: Dict[str, Any], pending_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """按网盘任务 ID 找离线任务；兼容旧记录里以 pending_key 充当的 task_id。"""
+        task_map = ctx.task_map or {}
+        for candidate in (
+                self._offline_native_task_id(item),
+                str(item.get("task_id") or "").strip().upper(),
+                str(pending_key or "").strip().upper(),
+        ):
+            if candidate and candidate in task_map:
+                return task_map[candidate]
+        return None
 
     @staticmethod
     def _upgrade_backup_name(file_name: str, task_id: str) -> str:
@@ -463,7 +477,7 @@ class PostprocessService(OwnerDelegator):
             group["needs_offline"] = group["needs_offline"] or str(
                 self._task_type(item)
             ) in self._OFFLINE_TASK_TYPES
-            task_id = str(item.get("task_id") or "").strip().upper()
+            task_id = self._offline_native_task_id(item)
             if task_id:
                 group["task_ids"].add(task_id)
         return list(groups.values())
@@ -960,7 +974,7 @@ class PostprocessService(OwnerDelegator):
             self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
     ) -> bool:
         """检查任务对应的物理文件是否已在暂存目录或最终媒体目录就位，命中时复用对象避免二次定位。"""
-        task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
+        task = self._lookup_offline_task(ctx, item, pending_key)
         if bool(item.get("moved_at") or (task and task.get("completed"))):
             return True
         cached_file = ctx.moved_files.get(pending_key) or ctx.prepared_files.get(pending_key)
@@ -1246,7 +1260,7 @@ class PostprocessService(OwnerDelegator):
             self, ctx: PostprocessBatchContext, item: Dict[str, Any], pending_key: str
     ) -> bool:
         """是否需要为洗版旧文件做批量备份避让。"""
-        task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
+        task = self._lookup_offline_task(ctx, item, pending_key)
         task_type = self._task_type(item)
         if task_type == "magnet":
             return False
@@ -1381,7 +1395,7 @@ class PostprocessService(OwnerDelegator):
                     or (is_replacement and not item.get("upgrade_old_backed_up"))
             ):
                 continue
-            task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
+            task = self._lookup_offline_task(ctx, item, pending_key)
             staging_dir = str(
                 item.get("staging_dir") or item.get("cloud_dir") or "/"
             ).rstrip("/") or "/"
@@ -1501,8 +1515,7 @@ class PostprocessService(OwnerDelegator):
             self, item: Dict[str, Any], pending_key: str, ctx: PostprocessBatchContext
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
         """统一检查网盘离线任务就绪状态。"""
-        task_id = str(item.get("task_id") or "").strip().upper()
-        task = ctx.task_map.get(task_id) if task_id else None
+        task = self._lookup_offline_task(ctx, item, pending_key)
 
         # 1. 任务明确失败
         if task and bool(task.get("failed")):
@@ -1675,7 +1688,7 @@ class PostprocessService(OwnerDelegator):
             staging_name: str,
     ) -> List[str]:
         """网盘定位候选名：目标名、暂存名、离线任务名、ed2k 名、资源清单名。"""
-        task = ctx.task_map.get(str(item.get("task_id") or pending_key).upper())
+        task = self._lookup_offline_task(ctx, item, pending_key)
         task_name = (
             str((task or {}).get("name") or "").strip()
             if self._task_type(item) in self._FILE_WAIT_TASK_TYPES else ""
