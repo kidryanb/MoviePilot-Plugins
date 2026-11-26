@@ -41,6 +41,16 @@ class MediaFileParser:
         r"第\s*([0-9零一二两三四五六七八九十]{1,4})\s*期\s*"
         r"[\(（\[【]?\s*([上下])\s*(?:集|篇|半场|半)?\s*[\)）\]】]?"
     )
+    #: 剧集「第N集（上/下）」「第N集上」：有的平台把一集拆成上下两集，TMDB 记为 2N-1 / 2N。
+    #: 与「第N期上/下」不同，这种命名也常见于不拆集的剧，所以只在播出日期能复核时才采用。
+    _SPLIT_EPISODE_PATTERNS = (
+        # 第7集上 / 第7集下篇：上/下紧跟「集」，后面不能再接汉字（排除「第8集上海往事」）
+        re.compile(r"第\s*([0-9零一二两三四五六七八九十]{1,4})\s*集([上下])"
+                   r"(?:集|篇|半场|半)?(?![\u4e00-\u9fff])"),
+        # 第7集（下）/ 第7集：片名（下）：上/下必须在括号里
+        re.compile(r"第\s*([0-9零一二两三四五六七八九十]{1,4})\s*集[^\(（\[【/\\]{0,40}"
+                   r"[\(（\[【]\s*([上下])\s*(?:集|篇|半场|半)?\s*[\)）\]】]"),
+    )
     _CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
                   "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
@@ -184,6 +194,24 @@ class MediaFileParser:
         if not issue or issue <= 0:
             return None
         return issue * 2 - (1 if match.group(2) == "上" else 0)
+
+    @classmethod
+    def split_episode_number(cls, file_name: str) -> Optional[int]:
+        """「第N集（上）」→ 2N-1，「第N集（下）」→ 2N；没有这种标记时返回 None。
+
+        只做换算，不判断这部剧是否真的按上下拆集；调用方需要用播出日期复核。
+        """
+        text = str(file_name or "")
+        if "集" not in text:
+            return None
+        for pattern in cls._SPLIT_EPISODE_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            number = cls._issue_number(match.group(1))
+            if number and number > 0:
+                return number * 2 - (1 if match.group(2) == "上" else 0)
+        return None
 
     @classmethod
     def normalize_split_issue(cls, file_name: str) -> str:
