@@ -210,13 +210,22 @@ class SeasonGuard:
 
     # ---- 集号 ----
 
-    def bare_issue_episode(self, name: str) -> Optional[int]:
-        """只有「第N期」没有上/下时，只在日期与某一集播出日完全一致时给出集号。"""
+    def dated_episode(self, name: str) -> Optional[int]:
+        """文件名里的日期与本季唯一一集的播出日完全一致时返回那一集，否则 None。"""
         file_date = MediaFileParser.extract_date(name)
         if not file_date:
             return None
         hits = [episode for episode, value in self.air_dates.items() if value == file_date]
         return hits[0] if len(hits) == 1 else None
+
+    def bare_issue_episode(self, name: str) -> Optional[int]:
+        """只有「第N期」没有上/下时，只在日期与某一集播出日完全一致时给出集号。"""
+        return self.dated_episode(name)
+
+    @staticmethod
+    def is_extra_content(name: str) -> bool:
+        """文件名带加更、花絮、彩蛋、预告等字样，多半不是正片。"""
+        return bool(_EXTRA_CONTENT_PATTERN.search(str(name or "")))
 
     def episode_reject_reason(self, name: str, episode: int, relative_path: str = "") -> str:
         episode = int(episode)

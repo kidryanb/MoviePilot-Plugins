@@ -209,6 +209,17 @@ class FileMatcher:
                 return None
             return episode
 
+        split_episode = MediaFileParser.split_episode_number(name)
+        if split_episode is not None and not MediaFileParser.extract_season_episode(name):
+            # 「第N集（上/下）」：只有文件日期正好是 E{2N-1}/E{2N} 的播出日才这样换算，
+            # 否则这部剧可能没有拆集，交给后面的常规解析。
+            if guard is not None and guard.dated_episode(name) == split_episode:
+                reason = guard.episode_reject_reason(name, split_episode, relative_path)
+                if reason:
+                    logger.debug(f"季归属校验拒绝：{name}：{reason}")
+                    return None
+                return split_episode
+
         meta = cls._platform_meta(name)
         if not meta:
             return None
@@ -248,6 +259,28 @@ class FileMatcher:
         return episode
 
     @staticmethod
+    def _dated_fallback(item: Any, guard: Any) -> int | None:
+        """没解析出集号的正片：文件日期与本季唯一一集播出日一致时给出那一集。
+
+        带 SxxExx 的文件不走这里（它的集号已经被否决过）；花絮、彩蛋等附属内容也不走。
+        """
+        if guard is None:
+            return None
+        name = str((item or {}).get("name") or "").strip()
+        if (not name or MediaFileParser.extract_season_episode(name)
+                or guard.is_extra_content(name)):
+            return None
+        episode = guard.dated_episode(name)
+        if episode is None:
+            return None
+        relative_path = str(
+            (item or {}).get("_relative_path") or (item or {}).get("relative_path") or ""
+        )
+        if guard.episode_reject_reason(name, episode, relative_path):
+            return None
+        return episode
+
+    @staticmethod
     def episode_candidates(
             files: list,
             season: int,
@@ -261,6 +294,7 @@ class FileMatcher:
 
         target_episodes = set(episode_list)
         strict_matches = {episode: [] for episode in episode_list}
+        dated_matches = {episode: [] for episode in episode_list}
         loose_matches = {episode: [] for episode in episode_list}
         loosest_matches = {episode: [] for episode in episode_list}
         loose_patterns = {
@@ -295,6 +329,11 @@ class FileMatcher:
             if found_episode is not None:
                 if found_episode in target_episodes:
                     strict_matches[found_episode].append(item)
+                continue
+            dated = FileMatcher._dated_fallback(item, guard)
+            if dated is not None:
+                if dated in target_episodes:
+                    dated_matches[dated].append(item)
                 continue
             # 有目标媒体时，平台无法识别标题或季集的文件不能进入转存。
             if mediainfo is not None:
@@ -333,8 +372,11 @@ class FileMatcher:
         results = {}
         unmatched: List[int] = []
         for episode in episode_list:
+            # 日期兜底只在这一集唯一一个文件对得上时采用，避免同一天的附属节目顶替正片
+            dated = dated_matches[episode] if len(dated_matches[episode]) == 1 else []
             results[episode] = (
                     strict_matches[episode]
+                    or dated
                     or loose_matches[episode]
                     or loosest_matches[episode]
             )
