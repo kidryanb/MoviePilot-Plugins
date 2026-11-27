@@ -19,6 +19,19 @@ from ...utils.http_client import (
 )
 
 
+#: 400 响应体像网关报错时（上游把 HTTPS 当明文处理），退避这么久后用同一请求重试一次。
+_GATEWAY_BACKOFF_SECONDS = 0.5
+_GATEWAY_HTML_MARKER = b"plain http request was sent to https port"
+
+
+def _looks_like_gateway_error(response: Any) -> bool:
+    """400 但响应体是 nginx 网关报错（明文 HTTP 打到 HTTPS 端口）时返回 True。"""
+    body = getattr(response, "content", b"") or b""
+    if isinstance(body, str):
+        body = body.encode("utf-8", errors="replace")
+    return _GATEWAY_HTML_MARKER in body.lower()
+
+
 class PanSouClient:
     """网盘搜索客户端"""
 
@@ -378,6 +391,25 @@ class PanSouClient:
                         timeout=self.search_timeout,
                         proxies=self._proxies,
                     )
+
+            if response.status_code == 400 and _looks_like_gateway_error(response):
+                # 上游边缘偶发把 HTTPS 连接当明文处理，回 nginx 的 400 HTML。
+                # 不是业务错误：退避后用同一请求再试一次，仍失败就照常报错。
+                logger.warning(
+                    f"PanSou 返回 HTTP 400 网关错误（明文请求打到 HTTPS 端口），"
+                    f"{_GATEWAY_BACKOFF_SECONDS:.1f} 秒后重试一次"
+                )
+                time.sleep(_GATEWAY_BACKOFF_SECONDS)
+                response = gated_request(
+                    self._request_gate,
+                    requests.post,
+                    search_url,
+                    impersonate="chrome",
+                    json=payload,
+                    headers=headers,
+                    timeout=self.search_timeout,
+                    proxies=self._proxies,
+                )
 
             if response.status_code != 200:
                 return {
